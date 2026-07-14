@@ -635,7 +635,7 @@ const probeClaudeCapabilities = (
   );
 };
 
-const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
+export const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   claudeSettings: ClaudeSettings,
   args: ReadonlyArray<string>,
   environment?: NodeJS.ProcessEnv,

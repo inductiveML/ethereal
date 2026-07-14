@@ -1,4 +1,10 @@
-import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
+import {
+  Maximize2Icon,
+  Minimize2Icon,
+  PanelBottomIcon,
+  PanelRightIcon,
+  SquareTerminalIcon,
+} from "lucide-react";
 import { memo } from "react";
 
 import { Toggle } from "../ui/toggle";
@@ -13,6 +19,8 @@ interface PanelLayoutControlsProps {
   rightPanelShortcutLabel: string | null;
   onToggleTerminal: () => void;
   onToggleRightPanel: () => void;
+  rawClaudeAvailable?: boolean;
+  onOpenRawClaude?: () => void;
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
@@ -24,6 +32,8 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   rightPanelShortcutLabel,
   onToggleTerminal,
   onToggleRightPanel,
+  rawClaudeAvailable = false,
+  onOpenRawClaude,
 }: PanelLayoutControlsProps) {
   return (
     <div
@@ -52,6 +62,25 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
             : "Terminal drawer is unavailable"}
         </TooltipPopup>
       </Tooltip>
+      {rawClaudeAvailable && onOpenRawClaude ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 [-webkit-app-region:no-drag]"
+                pressed={false}
+                onPressedChange={onOpenRawClaude}
+                aria-label="Open raw Claude session"
+                variant="ghost"
+                size="sm"
+              >
+                <SquareTerminalIcon className="size-3.5" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">Open raw Claude session</TooltipPopup>
+        </Tooltip>
+      ) : null}
       <Tooltip>
         <TooltipTrigger
           render={

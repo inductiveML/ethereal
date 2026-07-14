@@ -2322,6 +2322,15 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiState.terminalIds.length,
     terminalUiState.terminalOpen,
   ]);
+  const rawClaudeTerminalId = "claude-pty-raw";
+  const rawClaudeAvailable =
+    activeProviderStatus?.driver === ProviderDriverKind.make("claudePty") &&
+    activeKnownTerminalIds.includes(rawClaudeTerminalId);
+  const openRawClaudeSession = useCallback(() => {
+    if (!activeThreadRef || !rawClaudeAvailable) return;
+    storeEnsureTerminal(activeThreadRef, rawClaudeTerminalId, { open: true });
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [activeThreadRef, rawClaudeAvailable, storeEnsureTerminal]);
   const splitTerminal = useCallback(
     (direction: "horizontal" | "vertical" = "horizontal") => {
       if (!activeThreadRef || hasReachedSplitLimit || !activeThreadId || !activeProject) {
@@ -4924,6 +4933,8 @@ function ChatViewContent(props: ChatViewProps) {
       rightPanelShortcutLabel={shortcutLabelForCommand(keybindings, "rightPanel.toggle")}
       onToggleTerminal={toggleTerminalVisibility}
       onToggleRightPanel={toggleRightPanel}
+      rawClaudeAvailable={rawClaudeAvailable}
+      onOpenRawClaude={openRawClaudeSession}
     />
   );
   const panelLayoutControls = (
