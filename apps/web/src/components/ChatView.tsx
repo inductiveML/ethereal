@@ -16,9 +16,12 @@ import {
   type TurnId,
   type KeybindingCommand,
   OrchestrationThreadActivity,
+  type OrchestrationTaskShell,
+  type OrchestrationThreadShell,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
+  TaskId,
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import {
@@ -190,6 +193,7 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
+import { taskEnvironment } from "../state/tasks";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -199,12 +203,13 @@ import {
   useThreadProposedPlans,
   useThreadRefs,
 } from "../state/entities";
-import { environmentShell } from "../state/shell";
+import { environmentShell, environmentSnapshotAtom } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
+import { TaskContextDialog } from "./chat/TaskContextDialog";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1001,6 +1006,12 @@ function ChatViewContent(props: ChatViewProps) {
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
+  const updateTaskContext = useAtomCommand(taskEnvironment.updateContext, {
+    reportFailure: false,
+  });
+  const startTaskHandoff = useAtomCommand(taskEnvironment.startHandoff, {
+    reportFailure: false,
+  });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1036,6 +1047,7 @@ function ChatViewContent(props: ChatViewProps) {
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
   const serverThread = useThread(routeKind === "server" ? routeThreadRef : null);
+  const environmentSnapshot = useAtomValue(environmentSnapshotAtom(environmentId));
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     routeKind === "server" ? store.threadLastVisitedAtById[routeThreadKey] : undefined,
@@ -1239,6 +1251,31 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const activeTaskId = useMemo(
+    () => (serverThread ? (serverThread.taskId ?? TaskId.make(`legacy-${serverThread.id}`)) : null),
+    [serverThread],
+  );
+  const activeTask = useMemo<OrchestrationTaskShell | null>(() => {
+    if (!serverThread || !activeTaskId) return null;
+    const persisted = environmentSnapshot?.tasks.find((task) => task.id === activeTaskId);
+    if (persisted) return persisted;
+    return {
+      id: activeTaskId,
+      projectId: serverThread.projectId,
+      title: serverThread.title,
+      goal: "",
+      context: "",
+      sessionThreadIds: [serverThread.id],
+      createdAt: serverThread.createdAt,
+      updatedAt: serverThread.updatedAt,
+    };
+  }, [activeTaskId, environmentSnapshot?.tasks, serverThread]);
+  const activeTaskSessions = useMemo<ReadonlyArray<OrchestrationThreadShell>>(() => {
+    if (!activeTaskId) return [];
+    return (environmentSnapshot?.threads ?? []).filter(
+      (thread) => (thread.taskId ?? TaskId.make(`legacy-${thread.id}`)) === activeTaskId,
+    );
+  }, [activeTaskId, environmentSnapshot?.threads]);
   const threadError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
     : localDraftError;
@@ -4752,6 +4789,115 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef,
   ]);
 
+  const onSaveTaskContext = useCallback(
+    async (input: { readonly title: string; readonly goal: string; readonly context: string }) => {
+      if (!activeTask) return false;
+      const result = await updateTaskContext({
+        environmentId,
+        input: {
+          taskId: activeTask.id,
+          title: input.title,
+          goal: input.goal,
+          context: input.context,
+        },
+      });
+      if (result._tag === "Success") return true;
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not save task context",
+            description: error instanceof Error ? error.message : "The task update failed.",
+          }),
+        );
+      }
+      return false;
+    },
+    [activeTask, environmentId, updateTaskContext],
+  );
+
+  const onStartTaskHandoff = useCallback(
+    async (input: { readonly modelSelection: ModelSelection; readonly instructions: string }) => {
+      if (!activeTask || !activeThread || !isServerThread || !activeProject) return false;
+      const targetThreadId = newThreadId();
+      const targetProvider = providerStatuses.find(
+        (provider) => provider.instanceId === input.modelSelection.instanceId,
+      );
+      const title = truncate(
+        `${activeTask.title} · ${targetProvider?.displayName ?? input.modelSelection.instanceId}`,
+      );
+      const result = await startTaskHandoff({
+        environmentId,
+        input: {
+          taskId: activeTask.id,
+          sourceThreadId: activeThread.id,
+          targetThreadId,
+          messageId: newMessageId(),
+          title,
+          modelSelection: input.modelSelection,
+          runtimeMode,
+          interactionMode: "default",
+          branch: activeThreadBranch,
+          worktreePath: activeThread.worktreePath,
+          ...(input.instructions.trim().length > 0
+            ? { instructions: input.instructions.trim() }
+            : {}),
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not hand off task",
+              description: error instanceof Error ? error.message : "The handoff failed.",
+            }),
+          );
+        }
+        return false;
+      }
+      const targetThreadRef = scopeThreadRef(activeThread.environmentId, targetThreadId);
+      const synchronized = await waitForStartedServerThread(targetThreadRef, 5_000);
+      if (!synchronized) {
+        toastManager.add({
+          type: "warning",
+          title: "Handoff started",
+          description: "The new session is still synchronizing. Open it from the sidebar.",
+        });
+        return true;
+      }
+      const navigation = await settlePromise(() =>
+        navigate({
+          to: "/$environmentId/$threadId",
+          params: { environmentId: activeThread.environmentId, threadId: targetThreadId },
+        }),
+      );
+      if (navigation._tag === "Failure") {
+        toastManager.add({
+          type: "error",
+          title: "Handoff started",
+          description: "The new session was created, but Ethereal could not open it.",
+        });
+        return true;
+      }
+      return true;
+    },
+    [
+      activeProject,
+      activeTask,
+      activeThread,
+      activeThreadBranch,
+      environmentId,
+      isServerThread,
+      navigate,
+      providerStatuses,
+      runtimeMode,
+      startTaskHandoff,
+    ],
+  );
+
   const getModelDisabledReason = useCallback(
     (instanceId: ProviderInstanceId, model: string): string | null => {
       if (!activeThread) {
@@ -5050,6 +5196,21 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            {...(activeTask && isServerThread
+              ? {
+                  taskControl: (
+                    <TaskContextDialog
+                      activeThreadId={activeThread.id}
+                      disabled={activeEnvironmentUnavailable}
+                      onHandoff={onStartTaskHandoff}
+                      onSave={onSaveTaskContext}
+                      providers={providerStatuses}
+                      sessions={activeTaskSessions}
+                      task={activeTask}
+                    />
+                  ),
+                }
+              : {})}
             activeProjectName={activeProject?.title}
             openInCwd={gitCwd}
             activeProjectScripts={activeProject?.scripts}
