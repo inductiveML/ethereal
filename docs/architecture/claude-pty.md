@@ -2,14 +2,15 @@
 
 ## Purpose
 
-Ethereal's Claude PTY driver runs the installed interactive `claude` command beneath the existing
+Ethereal's only Claude runtime runs the installed interactive `claude` command beneath the existing
 `node-pty` abstraction. This preserves the user's normal Claude Code login and subscription while
-keeping Ethereal's primary experience native, semantic, and chat-first.
+keeping Ethereal's primary experience native, semantic, and chat-first. The historical internal
+driver identifier remains `claudeAgent` so existing settings and durable threads continue to load;
+it now refers exclusively to the PTY implementation.
 
-The retained Claude SDK driver remains separate. The built-in PTY instance is subscription-safe:
-it removes Anthropic API credentials and third-party routing variables before launching Claude.
-Explicitly configured custom PTY instances preserve their environment because those instances may
-intentionally use a router or API-backed provider.
+The built-in instance is subscription-safe: it removes Anthropic API credentials and third-party
+routing variables before launching Claude. Explicitly configured custom PTY instances preserve
+their environment because those instances may intentionally use a router or API-backed CLI.
 
 The design was informed by the
 [community PTY proof of concept](https://github.com/gigq/t3code/blob/cbe242c095c3bdfc4c2861f89c08f06c88f42069/apps/server/src/provider/Layers/ClaudePtyAdapter.ts)
@@ -55,20 +56,26 @@ starting
   -> ready
   -> working
   -> waiting-for-permission
+  -> waiting-for-user-input
   -> interrupted
   -> failed
   -> closed
 ```
 
-`SessionStart` is the authoritative ready signal. Bounded PTY output is retained only for attention
-detection; it is never scraped for assistant text. If readiness times out, the process is preserved,
-the session becomes an attention state, native composer sends are blocked, and the raw terminal can
-be opened. Ethereal never auto-answers an unknown TUI dialog.
+Claude Code 2.1.209 does not deliver an injected HTTP `SessionStart` hook, so startup readiness is
+detected from the supported `--ax-screen-reader` idle prompt and settled for one second while the TUI
+finishes loading. A `SessionStart` hook is still accepted when available. Bounded PTY output is
+retained only for readiness and attention detection; it is never scraped for assistant text. If
+readiness times out, the process is preserved, the session becomes an attention state, native
+composer sends are blocked, and the raw terminal can be opened. Ethereal never auto-answers an
+unknown TUI dialog.
 
-Interrupt writes Ctrl+C. Stop first writes `/exit`, then escalates to SIGTERM and SIGKILL after
-bounded grace periods. One next turn may be queued while Claude is working; a second queued turn is
-rejected. Mid-session default/plan changes are rejected with a restart instruction instead of
-driving fragile interactive menus.
+Interrupt writes Ctrl+C and completes the turn when the screen-reader idle prompt reappears; Claude
+does not send a `Stop` hook for user interruption. Session shutdown writes EOF, then escalates to
+SIGTERM and SIGKILL after bounded grace periods. EOF avoids the synthetic `/exit` transcript record
+that can deliver a stale `Stop` after resume. One next turn may be queued while Claude is working; a
+second queued turn is rejected. Mid-session default/plan changes are rejected with a restart
+instruction instead of driving fragile interactive menus.
 
 ## Transcript semantic channel
 
@@ -113,8 +120,13 @@ in bounded semantic chunks rather than character events.
 | token usage               | `thread.token-usage.updated`                      |
 
 Turn completion prefers the explicit `Stop` hook, while transcript `stop_reason` is a durable
-secondary signal. A turn is not completed until its submitted prompt is acknowledged and all known
-tools have results. No-output and hard-turn timers surface warnings and recoverable failures.
+secondary signal. The blocking `UserPromptSubmit` hook drains resume-time transcript residue and
+records the native `prompt_id`. A `Stop` is accepted only when its `prompt_id` matches that current
+turn; records timestamped before the turn are ignored. This prevents late hooks from an older native
+turn from completing the new Ethereal turn. The hook's `last_assistant_message` is used when its
+JSONL text has not flushed yet. A turn is not completed until its submitted prompt is acknowledged
+and all known tools have results. No-output and hard-turn timers surface warnings and recoverable
+failures.
 
 ## Hook and approval channel
 
@@ -122,6 +134,7 @@ Each live provider session owns a separate HTTP server bound to `127.0.0.1` on a
 a separate random bearer secret. Claude receives the secret only through a named environment
 variable referenced from injected hook settings. The server accepts only POST, enforces a 1 MiB body
 limit, compares the token in constant time, and rejects a payload for any other native session ID.
+`UserPromptSubmit` and `Stop` provide the native prompt correlation described above.
 
 `PermissionRequest` is a blocking hook:
 
@@ -139,6 +152,14 @@ Approval-required mode uses Claude's `manual` permission mode. Auto-accept-edits
 `--dangerously-skip-permissions`. Unknown requests are never allowed automatically. Approval timeout,
 session stop, and process exit all resolve pending requests as cancellation. Ethereal never sends
 `y` or `n` to guess at a permission screen.
+
+`AskUserQuestion` does not use Claude's permission hook. Ethereal intercepts it with a blocking
+`PreToolUse` hook, emits `user-input.requested`, renders the existing native question UI, and waits
+for `respondToUserInput`. The answer map is returned through `updatedInput.answers`, keyed by each
+question's full text exactly as Claude expects. Multi-select values are comma-joined. Session stop,
+process exit, interruption, and timeout all deny the hook and resolve the native request instead of
+leaving Claude blocked. Other `PreToolUse` hooks receive an empty response and are never implicitly
+approved.
 
 ## Raw terminal escape hatch
 
@@ -170,13 +191,14 @@ The compatibility decision is centralized in `ClaudePtyCapabilities`, derived on
 `claude --version` and `claude --help`. Authentication uses the non-generative
 `claude auth status` command. No health probe sends a prompt.
 
-| Claude Code     | Arguments checked                                                  | Hooks               | Approval strategy            | Transcript                       |
-| --------------- | ------------------------------------------------------------------ | ------------------- | ---------------------------- | -------------------------------- |
-| 2.1.208 (local) | session ID, resume, name, model, effort, settings, permission mode | loopback HTTP hooks | blocking `PermissionRequest` | local JSONL under effective HOME |
+| Claude Code     | Arguments checked                                                  | Hooks               | Interactive requests                          | Transcript                       |
+| --------------- | ------------------------------------------------------------------ | ------------------- | --------------------------------------------- | -------------------------------- |
+| 2.1.209 (local) | session ID, resume, name, model, effort, settings, permission mode | loopback HTTP hooks | blocking `PermissionRequest` and `PreToolUse` | local JSONL under effective HOME |
 
-Versions without interactive sessions, resume, settings injection, required launch arguments, or
-HTTP PermissionRequest hooks are reported as unsupported. They are not silently downgraded to an
-unsupervised PTY flow.
+Claude Code 2.1.200 is the minimum supported version because Ethereal requires both correlated
+`prompt_id` hooks and the interactive `manual` permission mode. Versions without interactive
+sessions, resume, settings injection, required launch arguments, or HTTP PermissionRequest hooks are
+reported as unsupported. They are not silently downgraded to an unsupervised PTY flow.
 
 ## Security and privacy boundaries
 
@@ -192,12 +214,9 @@ unsupervised PTY flow.
 
 ## Known limitations
 
-- The end-to-end subscription-backed manual smoke procedure has not been run because it requires
-  explicit authorization to consume Claude usage.
-- Structured Claude `AskUserQuestion` responses are not bridged in this phase.
 - Plan/default mode changes require a session restart.
 - Image attachments are materialized as deterministic local path references; binary data is not
   pasted into the TUI.
 - The PTY runtime is local-only. Remote Claude over SSH is not implemented.
-- Compatibility is validated against Claude Code 2.1.208; future transcript or hook changes may
+- Compatibility is validated against Claude Code 2.1.209; future transcript or hook changes may
   require a compatibility update.

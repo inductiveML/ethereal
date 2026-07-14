@@ -13,7 +13,7 @@ patchedDependencies:
 importers:
   apps/server:
     dependencies:
-      '@anthropic-ai/claude-agent-sdk':
+      '@example/agent-sdk':
         specifier: ^0.3.170
         version: 0.3.170(peer@1.0.0)
       '@opencode-ai/sdk':
@@ -34,14 +34,14 @@ importers:
         specifier: 41.5.0
         version: 41.5.0
 packages:
-  '@anthropic-ai/claude-agent-sdk@0.3.170': {}
+  '@example/agent-sdk@0.3.170': {}
   '@ff-labs/fff-bin-darwin-arm64@0.9.4': {}
   '@opencode-ai/sdk@1.15.13': {}
   effect@4.0.0-beta.78: {}
   electron@41.5.0: {}
   react-grab@0.1.44: {}
 snapshots:
-  '@anthropic-ai/claude-agent-sdk@0.3.170(peer@1.0.0)': {}
+  '@example/agent-sdk@0.3.170(peer@1.0.0)': {}
   '@ff-labs/fff-bin-darwin-arm64@0.9.4': {}
   '@opencode-ai/sdk@1.15.13': {}
   effect@4.0.0-beta.78(patch_hash=effect-patch-hash): {}
@@ -54,7 +54,7 @@ it("pins staged direct and transitive resolution to the committed lockfile", () 
     dependencySources: [
       {
         importer: "apps/server",
-        names: ["@anthropic-ai/claude-agent-sdk", "@opencode-ai/sdk", "effect"],
+        names: ["@example/agent-sdk", "@opencode-ai/sdk", "effect"],
       },
       { importer: "apps/desktop", names: ["effect", "react-grab"] },
     ],
@@ -66,7 +66,7 @@ it("pins staged direct and transitive resolution to the committed lockfile", () 
   });
 
   assert.deepStrictEqual(result.dependencies, {
-    "@anthropic-ai/claude-agent-sdk": "0.3.170",
+    "@example/agent-sdk": "0.3.170",
     "@opencode-ai/sdk": "1.15.13",
     effect: "4.0.0-beta.78",
     "react-grab": "0.1.44",
@@ -83,7 +83,7 @@ it("pins staged direct and transitive resolution to the committed lockfile", () 
   assert.deepStrictEqual(Object.keys(stageLockfile.importers), ["."]);
   assert.deepInclude(stageLockfile.importers["."], {
     dependencies: {
-      "@anthropic-ai/claude-agent-sdk": {
+      "@example/agent-sdk": {
         specifier: "0.3.170",
         version: "0.3.170(peer@1.0.0)",
       },
@@ -99,10 +99,8 @@ it("pins staged direct and transitive resolution to the committed lockfile", () 
       electron: { specifier: "41.5.0", version: "41.5.0" },
     },
   });
-  assert.isTrue(Object.hasOwn(stageLockfile.packages, "@anthropic-ai/claude-agent-sdk@0.3.170"));
-  assert.isTrue(
-    Object.hasOwn(stageLockfile.snapshots, "@anthropic-ai/claude-agent-sdk@0.3.170(peer@1.0.0)"),
-  );
+  assert.isTrue(Object.hasOwn(stageLockfile.packages, "@example/agent-sdk@0.3.170"));
+  assert.isTrue(Object.hasOwn(stageLockfile.snapshots, "@example/agent-sdk@0.3.170(peer@1.0.0)"));
   assert.deepStrictEqual(stageLockfile.patchedDependencies, {
     "effect@4.0.0-beta.78": "effect-patch-hash",
   });

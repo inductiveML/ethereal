@@ -15,7 +15,7 @@ workspace. The remaining product applications are:
 - `apps/server`
 
 The Electron -> React -> typed WebSocket -> local orchestration server path remains intact. Codex,
-the current Claude SDK integration, other provider adapters, local persistence, approvals,
+the then-current Claude integration, other provider adapters, local persistence, approvals,
 terminals, Git worktrees, checkpoints, diffs, browser preview, and MCP support were preserved.
 
 ## Baseline
@@ -225,11 +225,11 @@ bundle identifiers, and URL schemes were intentionally not migrated in Phase 1.
 
 ## Preserved intentionally
 
-### Claude SDK adapter
+### Claude adapter (Phase 1 snapshot)
 
-The current Claude Agent SDK adapter remains as a working provider and as a behavioral reference
-for the planned interactive Claude Code PTY adapter. Phase 1 did not change Claude runtime
-semantics.
+Phase 1 retained the upstream Claude adapter as a temporary behavioral reference. Phase 2
+superseded and removed it after the interactive Claude Code PTY runtime became the sole Claude
+implementation.
 
 ### Codex adapter
 
@@ -460,8 +460,8 @@ These items are intentionally deferred:
 - Upgrade the development machine to the declared Node engine.
 - Address the nine existing React nested-component warnings separately.
 - Investigate the non-blocking Chromium cache warnings.
-- Phase 2 should implement the interactive Claude Code PTY adapter without removing the current SDK
-  adapter until parity is established.
+- Phase 2 follow-up: the interactive Claude Code PTY adapter established parity and replaced the
+  temporary SDK reference implementation.
 
 ## Repository size and dependency delta
 

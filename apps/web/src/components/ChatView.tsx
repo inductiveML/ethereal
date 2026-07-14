@@ -2324,7 +2324,7 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const rawClaudeTerminalId = "claude-pty-raw";
   const rawClaudeAvailable =
-    activeProviderStatus?.driver === ProviderDriverKind.make("claudePty") &&
+    activeProviderStatus?.driver === ProviderDriverKind.make("claudeAgent") &&
     activeKnownTerminalIds.includes(rawClaudeTerminalId);
   const openRawClaudeSession = useCallback(() => {
     if (!activeThreadRef || !rawClaudeAvailable) return;

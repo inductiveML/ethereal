@@ -43,13 +43,7 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
   },
   {
     value: ProviderDriverKind.make("claudeAgent"),
-    label: "Claude SDK",
-    icon: ClaudeAI,
-    settingsSchema: ClaudeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("claudePty"),
-    label: "Claude PTY",
+    label: "Claude",
     icon: ClaudeAI,
     badgeLabel: "Subscription",
     settingsSchema: ClaudeSettings,

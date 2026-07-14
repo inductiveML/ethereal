@@ -28,7 +28,7 @@ it("marks the PTY provider ready only with hook capability and subscription auth
       }),
     }),
   ).toMatchObject({
-    displayName: "Claude PTY",
+    displayName: "Claude",
     badgeLabel: "Subscription",
     status: "ready",
     auth: {

@@ -29,7 +29,7 @@ import type { ClaudeTranscriptCursor } from "./ClaudePtyProtocol.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const THREAD_ID = ThreadId.make("thread-claude-pty");
-const INSTANCE_ID = ProviderInstanceId.make("claudePty");
+const INSTANCE_ID = ProviderInstanceId.make("claudeAgent");
 
 class FakePtyProcess implements PtyAdapter.PtyProcess {
   readonly pid = 4242;
@@ -107,6 +107,7 @@ function makeHarness(overrides: Partial<ClaudePtyAdapterOptions> = {}) {
       rawRegistrations.push(input);
     },
     readinessTimeoutMs: 1_000,
+    readinessSettleMs: 1,
     approvalTimeoutMs: 1_000,
     shutdownGraceMs: 1,
     ...overrides,
@@ -150,7 +151,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           providerInstanceId: INSTANCE_ID,
           cwd: "/repo",
           runtimeMode: "approval-required",
@@ -162,6 +163,7 @@ describe("ClaudePtyAdapter", () => {
       const spawn = harness.spawns[0]!;
       assert.equal(spawn.shell, "claude");
       assert.notInclude(spawn.args ?? [], "-p");
+      assert.include(spawn.args ?? [], "--ax-screen-reader");
       assert.equal(spawn.env.ANTHROPIC_API_KEY, undefined);
       const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
       assert.isString(sessionId);
@@ -185,8 +187,16 @@ describe("ClaudePtyAdapter", () => {
       assert.strictEqual(harness.rawRegistrations[0]!.process, harness.process);
 
       const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
-      assert.equal(harness.process.writes.at(-1), "\u001b[200~hello\u001b[201~\r");
+      assert.deepEqual(harness.process.writes.slice(-2), ["\u001b[200~hello\u001b[201~", "\r"]);
       yield* Effect.promise(async () => {
+        await harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-hello",
+          prompt: "hello",
+        });
         await harness.getOnTranscriptRecord()!({
           type: "user",
           uuid: "user-1",
@@ -216,6 +226,7 @@ describe("ClaudePtyAdapter", () => {
           session_id: sessionId,
           transcript_path: transcriptPath(sessionId),
           cwd: "/repo",
+          prompt_id: "prompt-hello",
         });
       });
       yield* settle;
@@ -249,6 +260,229 @@ describe("ClaudePtyAdapter", () => {
     }).pipe(Effect.scoped);
   });
 
+  it.effect("starts from Claude's screen-reader idle prompt without a SessionStart hook", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "approval-required",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+
+      harness.process.emitData(
+        "[Screen Reader Mode: on via flag]\r\nClaude Code v2.1.209\r\n Ethereal\r\n$\u001b[4G",
+      );
+      yield* Effect.promise(() => sleepReal(5));
+
+      const session = yield* Fiber.join(startFiber);
+      assert.equal(session.status, "ready");
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
+      assert.deepEqual(harness.process.writes.slice(-2), ["\u001b[200~hello\u001b[201~", "\r"]);
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("uses Stop.last_assistant_message when the JSONL text flush lags the hook", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "approval-required",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+      const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
+      yield* Effect.promise(async () => {
+        await harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-lagged",
+          prompt: "hello",
+        });
+        await harness.getOnTranscriptRecord()!({
+          type: "user",
+          uuid: "user-lagged",
+          message: { content: "hello" },
+        });
+        await harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-lagged",
+          last_assistant_message: "Lag-safe answer",
+        });
+      });
+      yield* settle;
+
+      assert.isTrue(
+        events.some(
+          (event) => event.type === "content.delta" && event.payload.delta === "Lag-safe answer",
+        ),
+      );
+      assert.isTrue(
+        events.some((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("correlates Stop hooks to the submitted prompt across resume residue", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "approval-required",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+      const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "current prompt" });
+      yield* Effect.promise(async () => {
+        await harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-before-ack",
+          last_assistant_message: "pre-ack stale response",
+        });
+        await harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-current",
+          prompt: "current prompt",
+        });
+        await harness.getOnTranscriptRecord()!({
+          type: "assistant",
+          uuid: "assistant-stale",
+          timestamp: "2026-07-14T11:59:00.000Z",
+          message: { content: [{ type: "text", text: "stale response" }] },
+        });
+        await harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-stale",
+          last_assistant_message: "stale response",
+        });
+      });
+      yield* settle;
+
+      assert.isFalse(
+        events.some(
+          (event) =>
+            event.type === "content.delta" &&
+            ["pre-ack stale response", "stale response"].includes(event.payload.delta),
+        ),
+      );
+      assert.isFalse(
+        events.some((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+      );
+
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-current",
+          last_assistant_message: "current response",
+        }),
+      );
+      yield* settle;
+
+      assert.isTrue(
+        events.some(
+          (event) => event.type === "content.delta" && event.payload.delta === "current response",
+        ),
+      );
+      assert.isTrue(
+        events.some((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+      );
+      assert.isAtLeast(harness.getTranscriptPolls(), 2);
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("stops an interactive session with EOF instead of recording /exit", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "approval-required",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+
+      yield* adapter.stopSession(THREAD_ID);
+
+      assert.include(harness.process.writes, "\u0004");
+      assert.isFalse(harness.process.writes.some((write) => write.includes("/exit")));
+    }).pipe(Effect.scoped);
+  });
+
   it.effect("keeps approval HTTP pending until the canonical request is resolved", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -261,7 +495,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -367,6 +601,115 @@ describe("ClaudePtyAdapter", () => {
     }).pipe(Effect.scoped);
   });
 
+  it.effect("bridges AskUserQuestion PreToolUse hooks through canonical user input", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "ask me" });
+
+      const originalQuestions = [
+        {
+          question: "Which checks should I run?",
+          header: "Checks",
+          options: [
+            { label: "Typecheck", description: "Run typecheck" },
+            { label: "Tests", description: "Run tests" },
+          ],
+          multiSelect: true,
+        },
+      ];
+      const hookResponse = harness.getOnHook()!({
+        hook_event_name: "PreToolUse",
+        session_id: sessionId,
+        transcript_path: transcriptPath(sessionId),
+        cwd: "/repo",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "ask-1",
+        tool_input: { questions: originalQuestions },
+      });
+      yield* settle;
+
+      const requested = events.find((event) => event.type === "user-input.requested");
+      assert.isDefined(requested?.requestId);
+      if (requested?.type !== "user-input.requested") assert.fail("Expected user-input request");
+      assert.equal(requested.payload.questions[0]?.id, "Which checks should I run?");
+      assert.equal(requested.providerRefs?.providerItemId, "ask-1");
+
+      yield* adapter.respondToUserInput(
+        THREAD_ID,
+        ApprovalRequestId.make(String(requested.requestId)),
+        { "Which checks should I run?": ["Typecheck", "Tests"] },
+      );
+      const response = yield* Effect.promise(() => hookResponse);
+      assert.deepEqual(response, {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+          permissionDecisionReason: "User answered Claude's question in Ethereal.",
+          updatedInput: {
+            questions: originalQuestions,
+            answers: { "Which checks should I run?": "Typecheck, Tests" },
+          },
+        },
+      });
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "user-input.resolved" &&
+            event.payload.answers["Which checks should I run?"] === "Typecheck, Tests",
+        ),
+      );
+
+      const unrelated = yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "PreToolUse",
+          session_id: sessionId,
+          tool_name: "Bash",
+          tool_input: { command: "pwd" },
+        }),
+      );
+      assert.deepEqual(unrelated, {});
+
+      const malformed = yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "PreToolUse",
+          session_id: sessionId,
+          tool_name: "AskUserQuestion",
+          tool_input: { questions: [{ header: "Missing question", options: [] }] },
+        }),
+      );
+      assert.equal(
+        (malformed.hookSpecificOutput as { permissionDecision?: string }).permissionDecision,
+        "deny",
+      );
+    }).pipe(Effect.scoped);
+  });
+
   it.effect("resumes the native session at a durable transcript offset without replay", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -380,7 +723,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           providerInstanceId: INSTANCE_ID,
           cwd: "/repo",
           runtimeMode: "approval-required",
@@ -453,7 +796,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -472,6 +815,14 @@ describe("ClaudePtyAdapter", () => {
       yield* Fiber.join(startFiber);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "tool" });
       yield* Effect.promise(async () => {
+        await harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-tool",
+          prompt: "tool",
+        });
         await harness.getOnTranscriptRecord()!({
           type: "user",
           uuid: "user-tool",
@@ -490,6 +841,7 @@ describe("ClaudePtyAdapter", () => {
           session_id: sessionId,
           transcript_path: transcriptPath(sessionId),
           cwd: "/repo",
+          prompt_id: "prompt-tool",
         });
       });
       assert.equal(events.filter((event) => event.type === "turn.completed").length, 0);
@@ -516,7 +868,7 @@ describe("ClaudePtyAdapter", () => {
       const adapter = yield* harness.make;
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudePty"),
+        provider: ProviderDriverKind.make("claudeAgent"),
         cwd: "/repo",
         runtimeMode: "approval-required",
       });
@@ -558,7 +910,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -591,13 +943,8 @@ describe("ClaudePtyAdapter", () => {
           uuid: "user-first",
           message: { content: [{ type: "text", text: "first" }] },
         });
-        await harness.getOnHook()!({
-          hook_event_name: "Stop",
-          session_id: sessionId,
-          transcript_path: transcriptPath(sessionId),
-          cwd: "/repo",
-        });
       });
+      harness.process.emitData("^C\r\n Ethereal\r\n$\u001b[4G");
       yield* settle;
 
       assert.isTrue(harness.process.writes.some((write) => write.includes("second")));
@@ -621,7 +968,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -679,7 +1026,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -721,7 +1068,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
         })
@@ -759,7 +1106,7 @@ describe("ClaudePtyAdapter", () => {
       const startFiber = yield* adapter
         .startSession({
           threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudePty"),
+          provider: ProviderDriverKind.make("claudeAgent"),
           cwd: "/repo",
           runtimeMode: "approval-required",
           interactionMode: "plan",
@@ -791,7 +1138,7 @@ describe("ClaudePtyAdapter", () => {
           },
         ],
       });
-      assert.match(harness.process.writes.at(-1) ?? "", /\/tmp\/attachments\/image-1/u);
+      assert.match(harness.process.writes.at(-2) ?? "", /\/tmp\/attachments\/image-1/u);
       yield* Effect.promise(async () => {
         await harness.getOnTranscriptRecord()!({
           type: "user",

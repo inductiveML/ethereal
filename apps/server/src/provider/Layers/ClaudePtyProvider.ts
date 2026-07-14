@@ -73,7 +73,7 @@ export function applyClaudePtyProbe(
 
   return {
     ...base,
-    displayName: "Claude PTY",
+    displayName: "Claude",
     badgeLabel: "Subscription",
     version: capabilities.version ?? base.version,
     status: !capabilityReady ? "error" : subscriptionAuthenticated ? "ready" : "warning",
@@ -125,9 +125,9 @@ export const checkClaudePtyProviderStatus = Effect.fn("checkClaudePtyProviderSta
   const probeEnvironment = subscriptionOnly
     ? makeClaudeSubscriptionSafeEnvironment(environment ?? process.env)
     : environment;
-  const base = yield* checkClaudeProviderStatus(settings, undefined, probeEnvironment);
+  const base = yield* checkClaudeProviderStatus(settings, probeEnvironment);
   if (!settings.enabled || !base.installed) {
-    return { ...base, displayName: "Claude PTY", badgeLabel: "Subscription" };
+    return { ...base, displayName: "Claude", badgeLabel: "Subscription" };
   }
   const run = (args: readonly string[], timeout: Duration.Input) =>
     runClaudeCommand(settings, args, probeEnvironment).pipe(
@@ -151,7 +151,7 @@ export const checkClaudePtyProviderStatus = Effect.fn("checkClaudePtyProviderSta
   if (!versionOutput || !helpOutput || !authOutput) {
     return {
       ...base,
-      displayName: "Claude PTY",
+      displayName: "Claude",
       badgeLabel: "Subscription",
       status: "error",
       message: "Claude PTY capability or subscription-authentication probe failed.",

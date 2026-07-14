@@ -30,7 +30,6 @@ export function formatProviderDisplayName(provider: string | null | undefined): 
   if (!provider) return "This agent";
   switch (provider) {
     case "claudeAgent":
-    case "claudePty":
     case "claude":
       return "Claude";
     case "codex":

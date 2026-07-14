@@ -33,6 +33,16 @@ describe("ClaudePtyProtocol", () => {
     });
   });
 
+  it("requires prompt-id-capable hooks and the interactive manual permission mode", () => {
+    const capabilities = parseClaudePtyCapabilities({
+      versionOutput: "2.1.199 (Claude Code)",
+      helpOutput: "--settings --session-id --resume --name --model --permission-mode",
+    });
+
+    expect(capabilities.httpHooks).toBe(false);
+    expect(capabilities.permissionRequestHook).toBe(false);
+  });
+
   it("constructs an interactive, subscription-only launch with private HTTP hooks", () => {
     const launch = buildClaudePtyLaunchSpec({
       binaryPath: "/opt/claude",
@@ -59,6 +69,7 @@ describe("ClaudePtyProtocol", () => {
     expect(launch.args).toContain("--permission-mode");
     expect(launch.args).toContain("manual");
     expect(launch.args).toContain("--settings");
+    expect(launch.args).toContain("--ax-screen-reader");
     expect(launch.args).toContain("--chrome");
     expect(launch.args).not.toContain("-p");
     expect(launch.args).not.toContain("--print");
@@ -154,7 +165,7 @@ describe("ClaudePtyProtocol", () => {
 
   it("neutralizes control sequences before bracketed paste", () => {
     const encoded = encodeClaudeBracketedPaste("hello\r\nworld\u001b[201~oops\u0000");
-    expect(encoded).toBe("\u001b[200~hello\nworld[201~oops\uFFFD\u001b[201~\r");
+    expect(encoded).toBe("\u001b[200~hello\nworld[201~oops\uFFFD\u001b[201~");
   });
 
   it.each([
@@ -164,24 +175,46 @@ describe("ClaudePtyProtocol", () => {
   ])("preserves safe %s prompt content", (_label, prompt) => {
     const encoded = encodeClaudeBracketedPaste(prompt);
     expect(encoded.startsWith("\u001b[200~")).toBe(true);
-    expect(encoded.endsWith("\u001b[201~\r")).toBe(true);
+    expect(encoded.endsWith("\u001b[201~")).toBe(true);
     expect(encoded).not.toContain("\u0000");
   });
 
-  it("only becomes ready from an authoritative SessionStart hook", () => {
+  it("becomes ready from Claude's screen-reader idle prompt", () => {
     const spawned = advanceClaudePtyReadiness(initialClaudePtyReadiness, { type: "spawned" });
     const output = advanceClaudePtyReadiness(spawned, {
       type: "pty-output",
-      data: "Welcome to Claude Code",
+      data: "[Screen Reader Mode: on via flag]\r\nClaude Code v2.1.209\r\n Ethereal\r\n$\u001b[4G",
     });
-    const ready = advanceClaudePtyReadiness(output, { type: "hook", event: "SessionStart" });
-    const running = advanceClaudePtyReadiness(ready, { type: "prompt-submitted" });
+    const running = advanceClaudePtyReadiness(output, { type: "prompt-submitted" });
     const waiting = advanceClaudePtyReadiness(running, { type: "hook", event: "Stop" });
 
-    expect(output.state).toBe("starting");
-    expect(ready.state).toBe("ready");
+    expect(output.state).toBe("ready");
     expect(running.state).toBe("working");
     expect(waiting.state).toBe("ready");
+  });
+
+  it("rediscovers the idle prompt after an interrupt", () => {
+    const working = advanceClaudePtyReadiness(
+      advanceClaudePtyReadiness(initialClaudePtyReadiness, { type: "spawned" }),
+      { type: "prompt-submitted" },
+    );
+    const interrupted = advanceClaudePtyReadiness(working, { type: "interrupt-requested" });
+    const ready = advanceClaudePtyReadiness(interrupted, {
+      type: "pty-output",
+      data: "^C\r\n Ethereal\r\n$\u001b[4G",
+    });
+
+    expect(interrupted.lastOutput).toBe("");
+    expect(ready.state).toBe("ready");
+  });
+
+  it("keeps attention states authoritative over an idle-looking prompt", () => {
+    const output = advanceClaudePtyReadiness(initialClaudePtyReadiness, {
+      type: "pty-output",
+      data: "Press Enter to continue\r\n Ethereal\r\n$\u001b[4G",
+    });
+
+    expect(output.state).toBe("needs-attention");
   });
 
   it("tails JSONL by byte offset without losing split UTF-8 records", () => {

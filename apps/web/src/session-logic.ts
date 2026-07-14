@@ -32,8 +32,7 @@ export const PROVIDER_OPTIONS: Array<{
   pickerSidebarBadge?: "new" | "soon";
 }> = [
   { value: ProviderDriverKind.make("codex"), label: "Codex", available: true },
-  { value: ProviderDriverKind.make("claudePty"), label: "Claude PTY", available: true },
-  { value: ProviderDriverKind.make("claudeAgent"), label: "Claude SDK", available: true },
+  { value: ProviderDriverKind.make("claudeAgent"), label: "Claude", available: true },
   {
     value: ProviderDriverKind.make("opencode"),
     label: "OpenCode",

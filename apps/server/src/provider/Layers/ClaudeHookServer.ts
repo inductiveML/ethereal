@@ -10,8 +10,12 @@ export interface ClaudeHookInput extends Record<string, unknown> {
   readonly transcript_path?: string;
   readonly cwd?: string;
   readonly tool_name?: string;
+  readonly tool_use_id?: string;
   readonly tool_input?: Record<string, unknown>;
   readonly permission_suggestions?: readonly unknown[];
+  readonly prompt_id?: string;
+  readonly prompt?: string;
+  readonly last_assistant_message?: string;
 }
 
 export type ClaudeHookResponse = Record<string, unknown>;

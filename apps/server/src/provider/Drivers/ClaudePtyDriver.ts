@@ -44,7 +44,7 @@ import {
 import { makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
-const DRIVER_KIND = ProviderDriverKind.make("claudePty");
+const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
@@ -112,7 +112,7 @@ const withInstanceIdentity =
     ...snapshot,
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
-    displayName: input.displayName ?? "Claude PTY",
+    displayName: input.displayName ?? "Claude",
     badgeLabel: "Subscription",
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     continuation: { groupKey: input.continuationGroupKey },
@@ -121,11 +121,11 @@ const withInstanceIdentity =
 export const ClaudePtyDriver: ProviderDriver<ClaudeSettings, ClaudePtyDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
-    displayName: "Claude PTY",
+    displayName: "Claude",
     supportsMultipleInstances: true,
   },
   configSchema: ClaudeSettings,
-  defaultConfig: (): ClaudeSettings => decodeClaudeSettings({ enabled: false }),
+  defaultConfig: (): ClaudeSettings => decodeClaudeSettings({}),
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -153,7 +153,7 @@ export const ClaudePtyDriver: ProviderDriver<ClaudeSettings, ClaudePtyDriverEnv>
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
       });
-      const subscriptionOnly = String(instanceId) === "claudePty";
+      const subscriptionOnly = String(instanceId) === "claudeAgent";
       const adapter = yield* makeClaudePtyAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,

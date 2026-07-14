@@ -37,12 +37,11 @@ Effect.fn("name")(
 
 ## Summary
 
-- Total non-test candidates: `322`
+- Total non-test candidates: `258`
 
 ## Suggested Order
 
 - [ ] `apps/server/src/provider/Layers/ProviderService.ts`
-- [x] `apps/server/src/provider/Layers/ClaudeAdapter.ts`
 - [x] `apps/server/src/provider/Layers/CodexAdapter.ts`
 - [x] `apps/server/src/git/Layers/GitCore.ts`
 - [x] `apps/server/src/git/Layers/GitManager.ts`
@@ -53,18 +52,6 @@ Effect.fn("name")(
 - [ ] `Everything else`
 
 ## Checklist
-
-### `apps/server/src/provider/Layers/ClaudeAdapter.ts` (`62`)
-
-- [x] [buildUserMessageEffect](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L554)
-- [x] [makeClaudeAdapter](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L913)
-- [x] [startSession](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L2414)
-- [x] [sendTurn](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L2887)
-- [x] [interruptTurn](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L2975)
-- [x] [readThread](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L2984)
-- [x] [rollbackThread](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L2990)
-- [x] [stopSession](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/Layers/ClaudeAdapter.ts#L3039)
-- [x] Internal helpers and callback wrappers in this file
 
 ### `apps/server/src/git/Layers/GitCore.ts` (`58`)
 
@@ -187,7 +174,6 @@ Effect.fn("name")(
 - [ ] [apps/server/src/persistence/NodeSqliteClient.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/persistence/NodeSqliteClient.ts) (`2`)
 - [ ] [apps/server/src/persistence/Migrations.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/persistence/Migrations.ts) (`2`)
 - [ ] [apps/server/src/open.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/open.ts) (`2`)
-- [ ] [apps/server/src/git/Layers/ClaudeTextGeneration.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/git/Layers/ClaudeTextGeneration.ts) (`2`)
 - [ ] [apps/server/src/checkpointing/CheckpointDiffQuery.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/checkpointing/CheckpointDiffQuery.ts) (`2`)
 - [ ] [apps/server/src/provider/makeManagedServerProvider.ts](/Users/julius/Development/Work/codething-mvp/apps/server/src/provider/makeManagedServerProvider.ts) (`1`)
 

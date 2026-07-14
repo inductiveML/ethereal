@@ -1,7 +1,11 @@
 import type { CanonicalItemType, ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 
-const HTTP_HOOK_MIN_VERSION = [2, 1, 0] as const;
+// prompt_id correlation landed in 2.1.196 and the interactive `manual`
+// permission mode in 2.1.200. Ethereal requires both so resume-time Stop hooks
+// cannot complete a newly submitted turn and supervised sessions stay valid.
+const HTTP_HOOK_MIN_VERSION = [2, 1, 200] as const;
 const RESERVED_LAUNCH_FLAGS = new Set([
+  "ax-screen-reader",
   "dangerously-skip-permissions",
   "effort",
   "input-format",
@@ -201,9 +205,8 @@ export function buildClaudePtyLaunchSpec(input: {
     CLAUDE_CODE_ENTRYPOINT: "ethereal",
     ...(input.hookToken ? { [input.hookTokenEnvironmentVariable]: input.hookToken } : {}),
   };
-  // This driver is intentionally subscription-authenticated. Explicit API
-  // credentials belong to the retained SDK driver and must not silently
-  // redirect an interactive CLI session onto usage-based billing.
+  // The built-in Claude instance is subscription-authenticated. Explicit API
+  // credentials must not silently redirect it onto usage-based billing.
   if (input.subscriptionOnly !== false) {
     environment = makeClaudeSubscriptionSafeEnvironment(environment);
   }
@@ -213,6 +216,7 @@ export function buildClaudePtyLaunchSpec(input: {
     input.resumeSessionId ?? input.sessionId,
     "--name",
     "Ethereal",
+    "--ax-screen-reader",
     ...permissionArgs(input.runtimeMode, input.interactionMode ?? "default"),
     ...(input.model ? ["--model", input.model] : []),
     ...(input.effort ? ["--effort", input.effort] : []),
@@ -238,7 +242,7 @@ export function encodeClaudeBracketedPaste(input: string): string {
         : character;
     })
     .join("");
-  return `\u001b[200~${normalized}\u001b[201~\r`;
+  return `\u001b[200~${normalized}\u001b[201~`;
 }
 
 export type ClaudePtyReadinessState =
@@ -288,6 +292,12 @@ function ptyOutputNeedsAttention(value: string): boolean {
   ].some((marker) => plain.includes(marker));
 }
 
+function ptyOutputIsReady(value: string): boolean {
+  const ansiSequence = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+  const plain = value.replace(ansiSequence, "").replaceAll("\r\n", "\n");
+  return plain.includes("\n Ethereal\n$");
+}
+
 export function advanceClaudePtyReadiness(
   current: ClaudePtyReadiness,
   signal: ClaudePtyReadinessSignal,
@@ -297,13 +307,21 @@ export function advanceClaudePtyReadiness(
       return { ...current, state: "starting" };
     case "pty-output": {
       const lastOutput = (current.lastOutput + signal.data).slice(-8_192);
-      return {
-        ...current,
-        lastOutput,
-        ...(current.state === "starting" && ptyOutputNeedsAttention(lastOutput)
-          ? { state: "needs-attention" as const, reason: "Claude requires terminal attention." }
-          : {}),
-      };
+      const needsAttention = current.state === "starting" && ptyOutputNeedsAttention(lastOutput);
+      const canDiscoverIdlePrompt = current.state === "starting" || current.state === "interrupted";
+      if (needsAttention) {
+        return {
+          ...current,
+          lastOutput,
+          state: "needs-attention",
+          reason: "Claude requires terminal attention.",
+        };
+      }
+      if (canDiscoverIdlePrompt && ptyOutputIsReady(lastOutput)) {
+        const { reason: _reason, ...withoutReason } = current;
+        return { ...withoutReason, lastOutput, state: "ready" };
+      }
+      return { ...current, lastOutput };
     }
     case "hook":
       if (signal.event === "SessionStart") return { ...current, state: "ready" };
@@ -320,7 +338,7 @@ export function advanceClaudePtyReadiness(
     case "permission-resolved":
       return { ...current, state: "working" };
     case "interrupt-requested":
-      return { ...current, state: "interrupted" };
+      return { ...current, state: "interrupted", lastOutput: "" };
     case "attention":
       return { ...current, state: "needs-attention", reason: signal.reason };
     case "process-exit":

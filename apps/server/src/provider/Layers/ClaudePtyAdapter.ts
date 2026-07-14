@@ -12,10 +12,12 @@ import {
   type ProviderSendTurnInput,
   type ProviderSession,
   type ProviderInteractionMode,
+  type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
   ThreadId,
   TurnId,
+  type UserInputQuestion,
 } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
@@ -62,17 +64,32 @@ import {
   isAllowedClaudeTranscriptPath,
   resolveClaudeTranscriptPath,
 } from "./ClaudeTranscriptResolver.ts";
+import {
+  normalizeClaudeAskUserQuestionAnswers,
+  parseClaudeAskUserQuestionInput,
+} from "./ClaudeUserInput.ts";
 
-const PROVIDER = ProviderDriverKind.make("claudePty");
-const DEFAULT_INSTANCE_ID = ProviderInstanceId.make("claudePty");
+const PROVIDER = ProviderDriverKind.make("claudeAgent");
+const DEFAULT_INSTANCE_ID = ProviderInstanceId.make("claudeAgent");
 const RAW_TERMINAL_ID = "claude-pty-raw";
 const HOOK_TOKEN_ENV = "ETHEREAL_CLAUDE_HOOK_TOKEN";
 const CTRL_C = "\u0003";
+const CTRL_D = "\u0004";
 
 interface PendingApproval {
   readonly requestId: ApprovalRequestId;
   readonly requestType: CanonicalRequestType;
   readonly complete: (decision: ProviderApprovalDecision) => Promise<void>;
+}
+
+type PendingUserInputResolution =
+  | { readonly _tag: "answered"; readonly answers: Record<string, string> }
+  | { readonly _tag: "cancelled"; readonly reason: string };
+
+interface PendingUserInput {
+  readonly requestId: ApprovalRequestId;
+  readonly questions: ReadonlyArray<UserInputQuestion>;
+  readonly complete: (resolution: PendingUserInputResolution) => Promise<void>;
 }
 
 interface ClaudePtyTurn {
@@ -85,6 +102,7 @@ interface ClaudePtyTurn {
     { readonly itemId: RuntimeItemId; readonly itemType: CanonicalItemType }
   >;
   readonly assistantItems: Set<string>;
+  nativePromptId: string | undefined;
   promptAcknowledged: boolean;
   stopSeen: boolean;
   interruptRequested: boolean;
@@ -108,6 +126,7 @@ interface ClaudePtySessionContext {
   readonly resolveReady: () => void;
   readonly rejectReady: (cause: unknown) => void;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
+  readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly seenTranscriptEvents: Set<string>;
   readonly turns: ClaudePtyTurn[];
   completedTurnCount: number;
@@ -124,6 +143,7 @@ interface ClaudePtySessionContext {
   stopped: boolean;
   unsubscribeData: (() => void) | undefined;
   unsubscribeExit: (() => void) | undefined;
+  readinessSettleTimer: ReturnType<typeof setTimeout> | undefined;
 }
 
 export interface ClaudeRawTerminalRegistration {
@@ -145,7 +165,9 @@ export interface ClaudePtyAdapterOptions {
   readonly transcriptTailerFactory?: typeof startClaudeTranscriptTailer;
   readonly registerRawTerminal?: (input: ClaudeRawTerminalRegistration) => Promise<void>;
   readonly readinessTimeoutMs?: number;
+  readonly readinessSettleMs?: number;
   readonly approvalTimeoutMs?: number;
+  readonly userInputTimeoutMs?: number;
   readonly noOutputWarningMs?: number;
   readonly hardTurnTimeoutMs?: number;
   readonly shutdownGraceMs?: number;
@@ -259,6 +281,32 @@ function approvalResponse(
   };
 }
 
+function userInputResponse(
+  hook: ClaudeHookInput,
+  resolution: PendingUserInputResolution,
+): ClaudeHookResponse {
+  if (resolution._tag === "answered") {
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: "User answered Claude's question in Ethereal.",
+        updatedInput: {
+          ...hook.tool_input,
+          answers: resolution.answers,
+        },
+      },
+    };
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: resolution.reason,
+    },
+  };
+}
+
 export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* (
   claudeSettings: ClaudeSettings,
   options: ClaudePtyAdapterOptions = {},
@@ -278,7 +326,9 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
   const now = options.now ?? (() => new Date().toISOString());
   const transcriptTailerFactory = options.transcriptTailerFactory ?? startClaudeTranscriptTailer;
   const readinessTimeoutMs = options.readinessTimeoutMs ?? 15_000;
+  const readinessSettleMs = options.readinessSettleMs ?? 1_000;
   const approvalTimeoutMs = options.approvalTimeoutMs ?? 120_000;
+  const userInputTimeoutMs = options.userInputTimeoutMs ?? 10 * 60_000;
   const noOutputWarningMs = options.noOutputWarningMs ?? 30_000;
   const hardTurnTimeoutMs = options.hardTurnTimeoutMs ?? 20 * 60_000;
   const shutdownGraceMs = options.shutdownGraceMs ?? 1_500;
@@ -392,7 +442,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     };
   };
 
-  const handleSemanticEvent = Effect.fn("claudePty.handleSemanticEvent")(function* (
+  const handleSemanticEvent = Effect.fn("claudeAgent.handleSemanticEvent")(function* (
     context: ClaudePtySessionContext,
     semantic: ClaudeTranscriptSemanticEvent,
     rawRecord: Record<string, unknown>,
@@ -549,17 +599,25 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     yield* maybeCompleteTurn(context);
   });
 
-  const handleTranscriptRecord = Effect.fn("claudePty.handleTranscriptRecord")(function* (
+  const handleTranscriptRecord = Effect.fn("claudeAgent.handleTranscriptRecord")(function* (
     context: ClaudePtySessionContext,
     record: Record<string, unknown>,
   ) {
     if (context.stopped) return;
+    const turn = context.currentTurn;
+    if (
+      turn &&
+      typeof record.timestamp === "string" &&
+      Date.parse(record.timestamp) < Date.parse(turn.startedAt)
+    ) {
+      return;
+    }
     for (const semantic of parseClaudeTranscriptRecord(record)) {
       yield* handleSemanticEvent(context, semantic, record);
     }
   });
 
-  const completeTurn = Effect.fn("claudePty.completeTurn")(function* (
+  const completeTurn = Effect.fn("claudeAgent.completeTurn")(function* (
     context: ClaudePtySessionContext,
     state: "completed" | "interrupted" | "failed" = "completed",
   ) {
@@ -623,7 +681,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     if (queued) yield* beginTurn(context, queued.input, queued.turnId);
   });
 
-  const maybeCompleteTurn = Effect.fn("claudePty.maybeCompleteTurn")(function* (
+  const maybeCompleteTurn = Effect.fn("claudeAgent.maybeCompleteTurn")(function* (
     context: ClaudePtySessionContext,
   ) {
     const turn = context.currentTurn;
@@ -681,7 +739,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     turn.hardTimeoutTimer.unref?.();
   };
 
-  const beginTurn = Effect.fn("claudePty.beginTurn")(function* (
+  const beginTurn = Effect.fn("claudeAgent.beginTurn")(function* (
     context: ClaudePtySessionContext,
     input: ProviderSendTurnInput,
     turnId: TurnId,
@@ -732,6 +790,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       items: [],
       toolItems: new Map(),
       assistantItems: new Set(),
+      nativePromptId: undefined,
       promptAcknowledged: false,
       stopSeen: false,
       interruptRequested: false,
@@ -768,6 +827,19 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
           cause,
         }),
     });
+    // Claude's supported screen-reader renderer consumes paste and submit as
+    // separate terminal input frames. Sending Return in the same write leaves
+    // the prompt sitting in the raw terminal without starting the turn.
+    yield* Effect.try({
+      try: () => process.write("\r"),
+      catch: (cause) =>
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/start",
+          detail: "Failed to submit the prompt to the Claude PTY.",
+          cause,
+        }),
+    });
     armTurnTimers(context, turn);
   });
 
@@ -780,7 +852,15 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     );
   };
 
-  const handlePermissionRequest = Effect.fn("claudePty.handlePermissionRequest")(function* (
+  const resolveAllUserInputs = async (context: ClaudePtySessionContext, reason: string) => {
+    await Promise.all(
+      [...context.pendingUserInputs.values()].map((pending) =>
+        pending.complete({ _tag: "cancelled", reason }),
+      ),
+    );
+  };
+
+  const handlePermissionRequest = Effect.fn("claudeAgent.handlePermissionRequest")(function* (
     context: ClaudePtySessionContext,
     hook: ClaudeHookInput,
   ) {
@@ -879,7 +959,118 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     return yield* Effect.promise(() => response);
   });
 
-  const handleHook = Effect.fn("claudePty.handleHook")(function* (hook: ClaudeHookInput) {
+  const handleAskUserQuestion = Effect.fn("claudeAgent.handleAskUserQuestion")(function* (
+    context: ClaudePtySessionContext,
+    hook: ClaudeHookInput,
+  ) {
+    const parsed = parseClaudeAskUserQuestionInput(hook.tool_input);
+    if (!parsed) {
+      const reason = "Claude sent an invalid AskUserQuestion payload.";
+      yield* emit({
+        type: "runtime.warning",
+        ...stamp(),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: context.session.threadId,
+        ...(context.currentTurn ? { turnId: context.currentTurn.turnId } : {}),
+        payload: { message: reason },
+        providerRefs: {},
+        raw: { source: "claude.pty.hook", method: "PreToolUse/AskUserQuestion", payload: hook },
+      });
+      return userInputResponse(hook, { _tag: "cancelled", reason });
+    }
+
+    const requestId = ApprovalRequestId.make(idFactory());
+    const runtimeRequestId = RuntimeRequestId.make(requestId);
+    const response = new Promise<ClaudeHookResponse>((resolve) => {
+      let completed = false;
+      // @effect-diagnostics-next-line globalTimers:off - The native HTTP hook must fail closed if its UI response never arrives.
+      const timer = setTimeout(() => {
+        void complete({
+          _tag: "cancelled",
+          reason: "Claude's question timed out while waiting for user input.",
+        });
+      }, userInputTimeoutMs);
+      timer.unref?.();
+      const complete = async (resolution: PendingUserInputResolution) => {
+        if (completed) return;
+        completed = true;
+        clearTimeout(timer);
+        context.pendingUserInputs.delete(requestId);
+        const answers = resolution._tag === "answered" ? resolution.answers : {};
+        await runPromise(
+          emit({
+            type: "user-input.resolved",
+            ...stamp(),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.session.threadId,
+            ...(context.currentTurn ? { turnId: context.currentTurn.turnId } : {}),
+            requestId: runtimeRequestId,
+            payload: { answers },
+            providerRefs: {
+              ...(hook.tool_use_id
+                ? { providerItemId: ProviderItemId.make(hook.tool_use_id) }
+                : {}),
+              providerRequestId: requestId,
+            },
+            raw: {
+              source: "claude.pty.hook",
+              method: "PreToolUse/AskUserQuestion/resolved",
+              payload: { resolution: resolution._tag },
+            },
+          }),
+        );
+        if (context.currentTurn) {
+          await runPromise(
+            emit({
+              type: "session.state.changed",
+              ...stamp(),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: context.session.threadId,
+              payload: { state: "running" },
+              providerRefs: {},
+            }),
+          );
+        }
+        resolve(userInputResponse(hook, resolution));
+      };
+      context.pendingUserInputs.set(requestId, {
+        requestId,
+        questions: parsed.questions,
+        complete,
+      });
+    });
+
+    yield* emit({
+      type: "user-input.requested",
+      ...stamp(),
+      provider: PROVIDER,
+      providerInstanceId: boundInstanceId,
+      threadId: context.session.threadId,
+      ...(context.currentTurn ? { turnId: context.currentTurn.turnId } : {}),
+      requestId: runtimeRequestId,
+      payload: { questions: parsed.questions },
+      providerRefs: {
+        ...(hook.tool_use_id ? { providerItemId: ProviderItemId.make(hook.tool_use_id) } : {}),
+        providerRequestId: requestId,
+      },
+      raw: { source: "claude.pty.hook", method: "PreToolUse/AskUserQuestion", payload: hook },
+    });
+    yield* emit({
+      type: "session.state.changed",
+      ...stamp(),
+      provider: PROVIDER,
+      providerInstanceId: boundInstanceId,
+      threadId: context.session.threadId,
+      payload: { state: "waiting" },
+      providerRefs: {},
+    });
+    return yield* Effect.promise(() => response);
+  });
+
+  const handleHook = Effect.fn("claudeAgent.handleHook")(function* (hook: ClaudeHookInput) {
     const context =
       typeof hook.session_id === "string" ? sessionsByClaudeId.get(hook.session_id) : undefined;
     if (!context || context.stopped) return {};
@@ -921,23 +1112,51 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
           type: "hook",
           event: "SessionStart",
         });
-        context.session = { ...context.session, status: "ready", updatedAt: now() };
-        context.resolveReady();
-        yield* emit({
-          type: "session.state.changed",
-          ...stamp(),
-          provider: PROVIDER,
-          providerInstanceId: boundInstanceId,
-          threadId: context.session.threadId,
-          payload: { state: "ready" },
-          providerRefs: {},
-          raw: { source: "claude.pty.hook", method: "SessionStart", payload: hook },
-        });
+        if (context.session.status !== "ready") {
+          if (context.readinessSettleTimer) clearTimeout(context.readinessSettleTimer);
+          context.readinessSettleTimer = undefined;
+          context.session = { ...context.session, status: "ready", updatedAt: now() };
+          context.resolveReady();
+          yield* emit({
+            type: "session.state.changed",
+            ...stamp(),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.session.threadId,
+            payload: { state: "ready" },
+            providerRefs: {},
+            raw: { source: "claude.pty.hook", method: "SessionStart", payload: hook },
+          });
+        }
         return {};
       }
       case "PermissionRequest":
         return yield* handlePermissionRequest(context, hook);
-      case "Stop":
+      case "UserPromptSubmit": {
+        if (context.transcriptTailer) {
+          // Drain resume-time transcript residue before allowing the new prompt
+          // to enter Claude's conversation. The hook is blocking, so the
+          // current user record cannot race this poll.
+          yield* Effect.promise(() => context.transcriptTailer!.pollNow());
+        }
+        const turn = context.currentTurn;
+        if (!turn || hook.prompt !== turn.prompt) return {};
+        turn.nativePromptId = hook.prompt_id;
+        turn.promptAcknowledged = true;
+        return {};
+      }
+      case "PreToolUse":
+        return hook.tool_name === "AskUserQuestion"
+          ? yield* handleAskUserQuestion(context, hook)
+          : {};
+      case "Stop": {
+        const turn = context.currentTurn;
+        // A Stop without the matching UserPromptSubmit acknowledgement may be
+        // residue from the previous native turn, especially immediately after
+        // resume. Never let it complete the current Ethereal turn.
+        if (!turn?.nativePromptId || hook.prompt_id !== turn.nativePromptId) {
+          return {};
+        }
         context.readiness = advanceClaudePtyReadiness(context.readiness, {
           type: "hook",
           event: "Stop",
@@ -946,8 +1165,31 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         if (context.transcriptTailer) {
           yield* Effect.promise(() => context.transcriptTailer!.pollNow());
         }
+        if (
+          context.currentTurn &&
+          context.currentTurn.assistantItems.size === 0 &&
+          typeof hook.last_assistant_message === "string" &&
+          hook.last_assistant_message.length > 0
+        ) {
+          const messageId = `stop-${hook.prompt_id ?? context.currentTurn.turnId}`;
+          yield* handleSemanticEvent(
+            context,
+            {
+              type: "assistant-text",
+              messageId,
+              blockIndex: 0,
+              text: hook.last_assistant_message,
+            },
+            {
+              type: "hook",
+              uuid: messageId,
+              message: { content: [{ type: "text", text: hook.last_assistant_message }] },
+            },
+          );
+        }
         yield* maybeCompleteTurn(context);
         return {};
+      }
       case "SessionEnd":
         context.readiness = advanceClaudePtyReadiness(context.readiness, {
           type: "hook",
@@ -959,12 +1201,14 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     }
   });
 
-  const handleProcessExit = Effect.fn("claudePty.handleProcessExit")(function* (
+  const handleProcessExit = Effect.fn("claudeAgent.handleProcessExit")(function* (
     context: ClaudePtySessionContext,
     event: PtyAdapter.PtyExitEvent,
   ) {
     if (context.stopped) return;
     context.stopped = true;
+    if (context.readinessSettleTimer) clearTimeout(context.readinessSettleTimer);
+    context.readinessSettleTimer = undefined;
     context.readiness = advanceClaudePtyReadiness(context.readiness, {
       type: "process-exit",
       reason: `Claude exited with code ${event.exitCode}.`,
@@ -973,6 +1217,9 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     context.rejectReady(new Error(`Claude exited with code ${event.exitCode}.`));
     context.transcriptTailer?.close();
     yield* Effect.promise(() => resolveAllApprovals(context, "cancel"));
+    yield* Effect.promise(() =>
+      resolveAllUserInputs(context, "Claude exited before the question was answered."),
+    );
     if (context.currentTurn) {
       yield* completeTurn(
         context,
@@ -1036,7 +1283,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
   };
 
   const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = Effect.fn(
-    "claudePty.startSession",
+    "claudeAgent.startSession",
   )(function* (input) {
     if (input.provider !== undefined && input.provider !== PROVIDER) {
       return yield* new ProviderAdapterValidationError({
@@ -1115,6 +1362,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       resolveReady,
       rejectReady,
       pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
       seenTranscriptEvents: new Set(),
       turns: [],
       completedTurnCount: readResumeTurnCount(input.resumeCursor),
@@ -1134,6 +1382,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       stopped: false,
       unsubscribeData: undefined,
       unsubscribeExit: undefined,
+      readinessSettleTimer: undefined,
     };
     updateResumeCursor(context);
     sessionsByThread.set(input.threadId, context);
@@ -1235,6 +1484,39 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         type: "pty-output",
         data,
       });
+      if (context.currentTurn?.interruptRequested && context.readiness.state === "ready") {
+        void runPromise(completeTurn(context, "interrupted"));
+        return;
+      }
+      if (context.readiness.state === "ready" && context.session.status !== "ready") {
+        if (context.readinessSettleTimer) clearTimeout(context.readinessSettleTimer);
+        // @effect-diagnostics-next-line globalTimers:off - The interactive renderer redraws its first idle prompt while plugins and MCP status settle.
+        context.readinessSettleTimer = setTimeout(() => {
+          context.readinessSettleTimer = undefined;
+          if (
+            context.stopped ||
+            context.readiness.state !== "ready" ||
+            context.session.status === "ready"
+          ) {
+            return;
+          }
+          context.session = { ...context.session, status: "ready", updatedAt: now() };
+          context.resolveReady();
+          void runPromise(
+            emit({
+              type: "session.state.changed",
+              ...stamp(),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: context.session.threadId,
+              payload: { state: "ready" },
+              providerRefs: {},
+              raw: { source: "claude.pty", method: "screen-reader-ready", payload: {} },
+            }),
+          );
+        }, readinessSettleMs);
+        context.readinessSettleTimer.unref?.();
+      }
     });
     context.unsubscribeExit = spawned.onExit((event) => {
       void runPromise(handleProcessExit(context, event));
@@ -1340,7 +1622,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
   });
 
   const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = Effect.fn(
-    "claudePty.sendTurn",
+    "claudeAgent.sendTurn",
   )(function* (input) {
     const context = yield* requireSession(input.threadId);
     if (!context.currentTurn && context.readiness.state !== "ready") {
@@ -1368,11 +1650,14 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
   });
 
   const interruptTurn: ProviderAdapterShape<ProviderAdapterError>["interruptTurn"] = Effect.fn(
-    "claudePty.interruptTurn",
+    "claudeAgent.interruptTurn",
   )(function* (threadId) {
     const context = yield* requireSession(threadId);
     if (!context.process) return;
     if (context.currentTurn) context.currentTurn.interruptRequested = true;
+    yield* Effect.promise(() =>
+      resolveAllUserInputs(context, "User interrupted Claude before answering the question."),
+    );
     context.readiness = advanceClaudePtyReadiness(context.readiness, {
       type: "interrupt-requested",
     });
@@ -1389,7 +1674,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
   });
 
   const respondToRequest: ProviderAdapterShape<ProviderAdapterError>["respondToRequest"] =
-    Effect.fn("claudePty.respondToRequest")(function* (threadId, requestId, decision) {
+    Effect.fn("claudeAgent.respondToRequest")(function* (threadId, requestId, decision) {
       const context = yield* requireSession(threadId);
       const pending = context.pendingApprovals.get(requestId);
       if (!pending) {
@@ -1411,7 +1696,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       });
     });
 
-  const stopSessionInternal = Effect.fn("claudePty.stopSessionInternal")(function* (
+  const stopSessionInternal = Effect.fn("claudeAgent.stopSessionInternal")(function* (
     context: ClaudePtySessionContext,
     emitExit: boolean,
   ) {
@@ -1421,6 +1706,9 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     }
     context.stopping = true;
     yield* Effect.promise(() => resolveAllApprovals(context, "cancel"));
+    yield* Effect.promise(() =>
+      resolveAllUserInputs(context, "Claude session stopped before the question was answered."),
+    );
     const waitForExit = (milliseconds: number) =>
       Promise.race([
         context.exit.then(() => true),
@@ -1431,13 +1719,19 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         }),
       ]);
     if (context.process) {
-      bestEffortProcessWrite(context.process, encodeClaudeBracketedPaste("/exit"));
+      // EOF exits the idle interactive client without recording a synthetic
+      // `/exit` command in the durable conversation. Those local-command
+      // records can produce a late Stop hook after the next resume and race a
+      // newly submitted Ethereal turn.
+      bestEffortProcessWrite(context.process, CTRL_D);
       if (yield* Effect.promise(() => waitForExit(shutdownGraceMs))) return;
       bestEffortProcessKill(context.process, "SIGTERM");
       if (yield* Effect.promise(() => waitForExit(Math.min(shutdownGraceMs, 500)))) return;
       bestEffortProcessKill(context.process, "SIGKILL");
     }
     context.stopped = true;
+    if (context.readinessSettleTimer) clearTimeout(context.readinessSettleTimer);
+    context.readinessSettleTimer = undefined;
     context.transcriptTailer?.close();
     if (context.currentTurn) yield* completeTurn(context, "interrupted");
     context.unsubscribeData?.();
@@ -1474,14 +1768,36 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     sendTurn,
     interruptTurn,
     respondToRequest,
-    respondToUserInput: (threadId) =>
-      Effect.fail(
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "item/tool/respondToUserInput",
-          detail: `Claude PTY structured user input is not available for thread ${threadId}.`,
-        }),
-      ),
+    respondToUserInput: (threadId, requestId, answers: ProviderUserInputAnswers) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(threadId);
+        const pending = context.pendingUserInputs.get(requestId);
+        if (!pending) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "AskUserQuestion/respond",
+            detail: `Unknown pending user-input request: ${requestId}`,
+          });
+        }
+        const normalized = normalizeClaudeAskUserQuestionAnswers(pending.questions, answers);
+        if (!normalized) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "respondToUserInput",
+            issue: "Claude requires one non-empty answer for every question.",
+          });
+        }
+        yield* Effect.tryPromise({
+          try: () => pending.complete({ _tag: "answered", answers: normalized }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "AskUserQuestion/respond",
+              detail: "Failed to resolve Claude's pending question.",
+              cause,
+            }),
+        });
+      }),
     stopSession: (threadId) =>
       requireSession(threadId).pipe(
         Effect.flatMap((context) => stopSessionInternal(context, true)),
