@@ -101,11 +101,7 @@ function isTerminalProviderUpdateToastView(view: ProviderUpdateToastView) {
   return view.phase === "failed" || view.phase === "unchanged" || view.phase === "succeeded";
 }
 
-/**
- * The single-prompt provider update notification used when there is only one
- * local environment (no WSL backend). Non-WSL users see exactly this flow — the
- * per-environment split is gated behind WSL presence.
- */
+/** The provider update notification for the local desktop server. */
 export function ProviderUpdatePrimaryNotification() {
   const navigate = useNavigate();
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -117,8 +113,7 @@ export function ProviderUpdatePrimaryNotification() {
   const { dismissedNotificationKeys, dismissNotificationKey } =
     useDismissedProviderUpdateNotificationKeys();
 
-  // If this flow unmounts (e.g. a WSL backend appears and we switch to the
-  // per-environment popover), close any prompt it owns so it does not linger.
+  // Close any prompt owned by this flow when it unmounts.
   useEffect(() => {
     return () => {
       const activeToast = activeToastRef.current;

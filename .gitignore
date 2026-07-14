@@ -1,12 +1,11 @@
 node_modules
+.pnpm-store/
 .bun
 .turbo
 .DS_Store
 *.log
 *.tsbuildinfo
 apps/*/dist
-infra/*/dist
-.astro
 packages/*/dist
 .env
 .env.local
@@ -23,12 +22,9 @@ apps/web/src/components/__screenshots__
 __screenshots__/
 .tanstack
 squashfs-root/
-.vercel
 .gstack/
 dist-electron/
 .electron-runtime/
 node_modules/
-.alchemy/
 *.log
 .env*
-!.env.example

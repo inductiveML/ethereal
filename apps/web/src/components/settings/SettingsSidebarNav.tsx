@@ -5,7 +5,7 @@ import {
   BotIcon,
   GitBranchIcon,
   KeyboardIcon,
-  Link2Icon,
+  MonitorCogIcon,
   Settings2Icon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
@@ -20,7 +20,6 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "../ui/sidebar";
-import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 
 export type SettingsSectionPath =
   | "/settings/general"
@@ -39,7 +38,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
-  { label: "Connections", to: "/settings/connections", icon: Link2Icon },
+  { label: "Connections", to: "/settings/connections", icon: MonitorCogIcon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
 ];
 
@@ -105,8 +104,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
 
       <SidebarSeparator />
       <SidebarFooter className="p-2">
-        <T3ConnectSidebarSignIn />
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
+        <div className="grid grid-cols-[minmax(0,1fr)] items-center gap-1">
           <SidebarMenu className="min-w-0">
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -119,7 +117,6 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <T3ConnectSidebarAvatar />
         </div>
       </SidebarFooter>
     </>

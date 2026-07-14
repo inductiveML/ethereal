@@ -8,12 +8,6 @@ import {
   setConnectionCatalog,
 } from "./methods/connectionCatalog.ts";
 import {
-  getAdvertisedEndpoints,
-  getServerExposureState,
-  setServerExposureMode,
-  setTailscaleServeEnabled,
-} from "./methods/serverExposure.ts";
-import {
   bootstrapSshBearerSession,
   disconnectSshEnvironment,
   discoverSshHosts,
@@ -23,13 +17,6 @@ import {
   issueSshWebSocketTicket,
   resolveSshPasswordPrompt,
 } from "./methods/sshEnvironment.ts";
-import {
-  checkForUpdate,
-  downloadUpdate,
-  getUpdateState,
-  installUpdate,
-  setUpdateChannel,
-} from "./methods/updates.ts";
 import {
   confirm,
   getAppBranding,
@@ -41,7 +28,6 @@ import {
   showContextMenu,
 } from "./methods/window.ts";
 import * as PreviewIpc from "./methods/preview.ts";
-import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
@@ -66,26 +52,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(issueSshWebSocketTicket);
   yield* ipc.handle(resolveSshPasswordPrompt);
 
-  yield* ipc.handle(getServerExposureState);
-  yield* ipc.handle(setServerExposureMode);
-  yield* ipc.handle(setTailscaleServeEnabled);
-  yield* ipc.handle(getAdvertisedEndpoints);
-
-  yield* ipc.handle(getWslState);
-  yield* ipc.handle(setWslBackendEnabled);
-  yield* ipc.handle(setWslDistro);
-  yield* ipc.handle(setWslOnly);
-
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(confirm);
   yield* ipc.handle(setTheme);
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
-  yield* ipc.handle(getUpdateState);
-  yield* ipc.handle(setUpdateChannel);
-  yield* ipc.handle(downloadUpdate);
-  yield* ipc.handle(installUpdate);
-  yield* ipc.handle(checkForUpdate);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }

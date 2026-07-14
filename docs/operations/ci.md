@@ -1,6 +1,21 @@
 # CI quality gates
 
-- `.github/workflows/ci.yml` runs `bun run lint`, `bun run typecheck`, and `bun run test` on pull requests and pushes to `main`.
-- `.github/workflows/release.yml` builds macOS (`arm64` and `x64`), Linux (`x64`), and Windows (`x64`) desktop artifacts from a single `v*.*.*` tag and publishes one GitHub release.
-- The release workflow auto-enables signing only when platform credentials are present. macOS passkey builds additionally require `APPLE_TEAM_ID` and the `MACOS_PROVISIONING_PROFILE` secret; Windows uses Azure Trusted Signing. Without the core signing credentials, it still releases unsigned artifacts.
-- See [Release Checklist](./release.md) for the full release/signing setup checklist.
+`.github/workflows/ci.yml` validates pull requests and pushes to `main` with the same core gates used
+locally on a macOS runner:
+
+```bash
+vp install --frozen-lockfile
+vp run --filter @t3tools/desktop ensure:electron
+vp check
+vp run typecheck
+vp run test
+vp run build:desktop
+vp run test:desktop-smoke
+```
+
+The smoke test fails when Electron exits early, exits nonzero, or reports a fatal module/runtime
+error. It succeeds only after observing a concrete desktop-readiness log or after the process remains
+healthy for the bounded smoke-test window.
+
+`.github/workflows/release.yml` is a separate manual, macOS-only artifact workflow. Neither workflow
+deploys a hosted web app, mobile app, relay service, or release announcement.
