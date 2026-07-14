@@ -1,10 +1,13 @@
 # Architecture
 
-T3 Code runs as a **Node.js WebSocket server** that wraps `codex app-server` (JSON-RPC over stdio) and serves a React web app.
+Ethereal is an Electron desktop application whose renderer connects to a local **Node.js WebSocket
+server**. The server wraps coding-agent harnesses such as `codex app-server` and serves the React
+application bundled into the desktop build.
 
 ```
 ┌─────────────────────────────────┐
-│  Browser (React + Vite)         │
+│  Electron renderer              │
+│  React + Vite                   │
 │  wsTransport (state machine)    │
 │  Typed push decode at boundary  │
 └──────────┬──────────────────────┘

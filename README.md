@@ -1,90 +1,49 @@
-# T3 Code
+# Ethereal
 
-T3 Code is a minimal web GUI for coding agents (currently Codex, Claude, Cursor, and OpenCode, more coming soon).
+> A highly ethereal desktop coding workspace.
 
-## Installation
+Ethereal is a calm, chat-first desktop workspace for working with coding agents. It combines an
+Electron shell, a React client, and a local orchestration server while using provider CLIs and
+authentication already installed on the user's machine.
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, and OpenCode.
-> Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `cursor-agent login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
+Phase 1 preserves the core desktop application and removes the upstream marketing site, mobile app,
+hosted relay, and hosted web deployment infrastructure.
 
-### Run without installing
+## Supported providers
 
-```bash
-npx t3@latest
-```
+Install and authenticate at least one supported provider before starting Ethereal:
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+- Codex: install the [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`.
+- Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`.
+- Cursor: install the [Cursor CLI](https://cursor.com/cli) and run `cursor-agent login`.
+- OpenCode: install [OpenCode](https://opencode.ai) and authenticate it.
 
-### Desktop app
+## Development
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
-
-#### Windows (`winget`)
+Install [Vite+](https://viteplus.dev/guide/), then install dependencies and launch the desktop app:
 
 ```bash
-winget install T3Tools.T3Code
+vp install
+vp run dev:desktop
 ```
 
-#### macOS (Homebrew)
+The required quality gates are:
 
 ```bash
-brew install --cask t3-code
+vp check
+vp run typecheck
 ```
 
-#### Arch Linux (AUR)
+Run the workspace test package scripts with `vp run test`, or use `vp test` for the built-in Vite+
+test command.
 
-```bash
-yay -S t3code-bin
-```
+## Workspace
 
-## Some notes
+- `apps/desktop`: Electron shell and desktop integration.
+- `apps/web`: React/Vite renderer used by the desktop shell.
+- `apps/server`: local Node.js orchestration server and provider adapters.
+- `packages/contracts`: typed schemas and WebSocket contracts.
+- `packages/client-runtime`: shared client-side runtime.
+- `packages/shared`: shared runtime utilities.
 
-We are very very early in this project. Expect bugs.
-
-We are not accepting contributions yet.
-
-There's no public docs site yet, checkout the miscellaneous markdown files in [docs](./docs).
-
-## Documentation
-
-- [Getting started](./docs/getting-started/quick-start.md)
-- [Architecture overview](./docs/architecture/overview.md)
-- [Provider guides](./docs/providers/codex.md)
-- [Operations](./docs/operations/ci.md)
-- [Reference](./docs/reference/encyclopedia.md)
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+See [the documentation index](./docs/README.md) for architecture, provider, and development notes.
