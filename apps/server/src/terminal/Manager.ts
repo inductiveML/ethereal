@@ -127,6 +127,11 @@ export class TerminalManager extends Context.Service<
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
+    /** Attach a PTY whose lifecycle is owned by a provider runtime. */
+    readonly registerExternal: (
+      input: ExternalTerminalInput,
+    ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
+
     /**
      * Attach to a terminal and stream its initial snapshot followed by live events.
      *
@@ -229,6 +234,16 @@ export interface TerminalStartInput extends TerminalOpenInput {
   rows: number;
 }
 
+export interface ExternalTerminalInput {
+  readonly threadId: string;
+  readonly terminalId: string;
+  readonly cwd: string;
+  readonly cols: number;
+  readonly rows: number;
+  readonly label: string;
+  readonly process: PtyAdapter.PtyProcess;
+}
+
 export interface TerminalSessionState {
   threadId: string;
   terminalId: string;
@@ -254,6 +269,8 @@ export interface TerminalSessionState {
   /** Normalized child command name when `hasRunningSubprocess`; cleared when idle. */
   childCommandLabel: string | null;
   runtimeEnv: Record<string, string> | null;
+  externallyManaged: boolean;
+  labelOverride: string | null;
 }
 
 interface PersistHistoryRequest {
@@ -314,6 +331,9 @@ function normalizeChildCommandName(raw: string, platform: NodeJS.Platform): stri
 }
 
 function terminalWireLabel(session: TerminalSessionState): string {
+  if (session.labelOverride) {
+    return truncateTerminalWireLabel(session.labelOverride);
+  }
   if (session.hasRunningSubprocess && session.childCommandLabel) {
     const trimmed = session.childCommandLabel.trim();
     if (trimmed.length > 0) {
@@ -1717,6 +1737,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const stopProcess = Effect.fn("terminal.stopProcess")(function* (session: TerminalSessionState) {
     const process = session.process;
     if (!process) return;
+    const shouldKill = !session.externallyManaged;
 
     const updatedAt = yield* nowIso;
     yield* modifyManagerState((state) => {
@@ -1739,7 +1760,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       threadId: session.threadId,
       terminalId: session.terminalId,
     });
-    yield* startKillEscalation(process, session.threadId, session.terminalId);
+    if (shouldKill) {
+      yield* startKillEscalation(process, session.threadId, session.terminalId);
+    }
     yield* evictInactiveSessionsIfNeeded();
   });
 
@@ -1822,6 +1845,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.exitSignal = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
+      session.externallyManaged = false;
+      session.labelOverride = null;
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
@@ -2084,7 +2109,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session: TerminalSessionState,
       ) {
         cleanupProcessHandles(session);
-        if (!session.process) return;
+        if (!session.process || session.externallyManaged) return;
         yield* clearKillFiber(session.process);
         yield* runKillEscalation(session.process, session.threadId, session.terminalId);
       });
@@ -2131,6 +2156,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         hasRunningSubprocess: false,
         childCommandLabel: null,
         runtimeEnv: normalizedRuntimeEnv(input.env),
+        externallyManaged: false,
+        labelOverride: null,
       };
 
       const createdSession = session;
@@ -2158,6 +2185,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
 
     const liveSession = existing.value;
+    if (liveSession.externallyManaged && liveSession.process) {
+      const targetCols = input.cols ?? liveSession.cols;
+      const targetRows = input.rows ?? liveSession.rows;
+      if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
+        yield* resizePtyProcess(liveSession, liveSession.process, targetCols, targetRows);
+        liveSession.cols = targetCols;
+        liveSession.rows = targetRows;
+        liveSession.updatedAt = yield* nowIso;
+      }
+      return snapshot(liveSession);
+    }
     const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
     const currentRuntimeEnv = liveSession.runtimeEnv;
     const targetCols = input.cols ?? liveSession.cols;
@@ -2221,6 +2259,108 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   const open: TerminalManager["Service"]["open"] = (input) =>
     withThreadLock(input.threadId, openLocked(input));
+
+  const registerExternalLocked = Effect.fn("terminal.registerExternalLocked")(function* (
+    input: ExternalTerminalInput,
+  ) {
+    yield* assertValidCwd(input.cwd);
+    const sessionKey = toSessionKey(input.threadId, input.terminalId);
+    const existing = yield* getSession(input.threadId, input.terminalId);
+    if (
+      Option.isSome(existing) &&
+      existing.value.externallyManaged &&
+      existing.value.process === input.process
+    ) {
+      const live = existing.value;
+      if (live.cols !== input.cols || live.rows !== input.rows) {
+        yield* resizePtyProcess(live, input.process, input.cols, input.rows);
+        live.cols = input.cols;
+        live.rows = input.rows;
+      }
+      live.labelOverride = input.label;
+      live.updatedAt = yield* nowIso;
+      return snapshot(live);
+    }
+    if (Option.isSome(existing)) {
+      yield* stopProcess(existing.value);
+    }
+
+    const session: TerminalSessionState = Option.isSome(existing)
+      ? existing.value
+      : {
+          threadId: input.threadId,
+          terminalId: input.terminalId,
+          cwd: input.cwd,
+          worktreePath: null,
+          status: "starting",
+          pid: null,
+          history: yield* readHistory(input.threadId, input.terminalId),
+          pendingHistoryControlSequence: "",
+          pendingProcessEvents: [],
+          pendingProcessEventIndex: 0,
+          processEventDrainRunning: false,
+          exitCode: null,
+          exitSignal: null,
+          updatedAt: yield* nowIso,
+          eventSequence: 0,
+          cols: input.cols,
+          rows: input.rows,
+          process: null,
+          unsubscribeData: null,
+          unsubscribeExit: null,
+          hasRunningSubprocess: false,
+          childCommandLabel: null,
+          runtimeEnv: null,
+          externallyManaged: true,
+          labelOverride: input.label,
+        };
+
+    const processPid = input.process.pid;
+    const unsubscribeData = input.process.onData((data) => {
+      if (!enqueueProcessEvent(session, processPid, { type: "output", data })) return;
+      runFork(drainProcessEvents(session, processPid));
+    });
+    const unsubscribeExit = input.process.onExit((event) => {
+      if (!enqueueProcessEvent(session, processPid, { type: "exit", event })) return;
+      runFork(drainProcessEvents(session, processPid));
+    });
+    session.cwd = input.cwd;
+    session.worktreePath = null;
+    session.status = "running";
+    session.pid = processPid;
+    session.exitCode = null;
+    session.exitSignal = null;
+    session.cols = input.cols;
+    session.rows = input.rows;
+    session.process = input.process;
+    session.unsubscribeData = unsubscribeData;
+    session.unsubscribeExit = unsubscribeExit;
+    session.hasRunningSubprocess = false;
+    session.childCommandLabel = null;
+    session.runtimeEnv = null;
+    session.externallyManaged = true;
+    session.labelOverride = input.label;
+    session.pendingProcessEvents = [];
+    session.pendingProcessEventIndex = 0;
+    session.processEventDrainRunning = false;
+    const eventStamp = advanceEventSequence(session);
+    yield* modifyManagerState((state) => {
+      const sessions = new Map(state.sessions);
+      sessions.set(sessionKey, session);
+      return [undefined, { ...state, sessions }] as const;
+    });
+    yield* publishEvent({
+      type: "started",
+      threadId: input.threadId,
+      terminalId: input.terminalId,
+      sequence: eventStamp.sequence,
+      snapshot: snapshot(session),
+    });
+    return snapshot(session);
+  });
+
+  const registerExternal: TerminalManager["Service"]["registerExternal"] = (input) =>
+    withThreadLock(input.threadId, registerExternalLocked(input));
 
   const openOrAttachForStream = (input: TerminalAttachInput) =>
     withThreadLock(
@@ -2543,6 +2683,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             hasRunningSubprocess: false,
             childCommandLabel: null,
             runtimeEnv: normalizedRuntimeEnv(input.env),
+            externallyManaged: false,
+            labelOverride: null,
           };
           const createdSession = session;
           yield* modifyManagerState((state) => {
@@ -2553,6 +2695,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           yield* evictInactiveSessionsIfNeeded();
         } else {
           session = existingSession.value;
+          if (session.externallyManaged && session.process) {
+            return snapshot(session);
+          }
           yield* stopProcess(session);
           session.cwd = input.cwd;
           session.worktreePath = input.worktreePath ?? null;
@@ -2590,6 +2735,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       input.threadId,
       Effect.gen(function* () {
         if (input.terminalId) {
+          const session = yield* getSession(input.threadId, input.terminalId);
+          if (Option.isSome(session) && session.value.externallyManaged && session.value.process) {
+            return;
+          }
           yield* closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
           return;
         }
@@ -2609,6 +2758,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   return TerminalManager.of({
     open,
+    registerExternal,
     attachStream,
     write,
     resize,

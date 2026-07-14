@@ -296,6 +296,51 @@ it.layer(
     }),
   );
 
+  it.effect("attaches the provider-owned PTY without spawning or killing it", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      const externalProcess = new FakePtyProcess(7777);
+
+      const snapshot = yield* manager.registerExternal({
+        threadId: "thread-1",
+        terminalId: "claude-pty-raw",
+        cwd: process.cwd(),
+        cols: 120,
+        rows: 36,
+        label: "Claude raw session",
+        process: externalProcess,
+      });
+      externalProcess.emitData("Claude output\r\n");
+      yield* waitFor(
+        Effect.map(getEvents, (events) => events.some((event) => event.type === "output")),
+      );
+      yield* manager.resize({
+        threadId: "thread-1",
+        terminalId: "claude-pty-raw",
+        cols: 140,
+        rows: 42,
+      });
+      yield* manager.write({
+        threadId: "thread-1",
+        terminalId: "claude-pty-raw",
+        data: "raw input",
+      });
+      yield* manager.close({ threadId: "thread-1", terminalId: "claude-pty-raw" });
+
+      assert.equal(snapshot.label, "Claude raw session");
+      assert.equal(snapshot.pid, 7777);
+      assert.deepEqual(externalProcess.resizeCalls, [{ cols: 140, rows: 42 }]);
+      assert.deepEqual(externalProcess.writes, ["raw input"]);
+      assert.equal(externalProcess.killed, false);
+      expect(ptyAdapter.spawnInputs).toHaveLength(0);
+      assert.isTrue(
+        (yield* getEvents).some(
+          (event) => event.type === "output" && event.data === "Claude output\r\n",
+        ),
+      );
+    }),
+  );
+
   it.effect("attaches to running sessions without restarting them", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
