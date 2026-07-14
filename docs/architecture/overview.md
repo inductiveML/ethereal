@@ -17,14 +17,15 @@ application bundled into the desktop build.
 │  WebSocket + HTTP static server │
 │  ServerPushBus (ordered pushes) │
 │  ServerReadiness (startup gate) │
+│  Task context + handoffs        │
 │  OrchestrationEngine            │
 │  ProviderService                │
 │  CheckpointReactor              │
 │  RuntimeReceiptBus              │
 └──────────┬──────────────────────┘
-           │ JSON-RPC over stdio
+           │ provider protocols
 ┌──────────▼──────────────────────┐
-│  codex app-server               │
+│  Codex app-server / Claude PTY  │
 └─────────────────────────────────┘
 ```
 
@@ -39,6 +40,10 @@ application bundled into the desktop build.
 - **Background workers**: Long-running async flows such as runtime ingestion, command reaction, and checkpoint processing run as queue-backed workers. This keeps work ordered, reduces timing races, and gives tests a deterministic way to wait for the system to go idle.
 
 - **Runtime signals**: The server emits lightweight typed receipts when important async milestones finish, such as checkpoint capture, diff finalization, or a turn becoming fully quiescent. Tests and orchestration code wait on these signals instead of polling internal state.
+
+- **Task context**: A durable provider-neutral task owns the goal and canonical context shared by
+  its provider-session threads. Handoffs create a target thread and start its first turn as one
+  command. See [Task context and agent handoffs](./task-context-and-handoffs.md).
 
 ## Event Lifecycle
 
