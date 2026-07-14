@@ -3,55 +3,47 @@
 ## Task Completion Requirements
 
 - `vp check` and `vp run typecheck` must pass before considering tasks completed.
-  - If changing native mobile code, `vp run lint:mobile` must also pass.
-- Use `vp test` for the built-in Vite+ test command and `vp run test` when you specifically need the `test` package script.
+- Use `vp test` for the built-in Vite+ test command and `vp run test` when you specifically need the
+  `test` package script.
 
 ## Project Snapshot
 
-T3 Code is a minimal web GUI for using coding agents like Codex and Claude.
+Ethereal is a calm, chat-first desktop workspace for using coding agents such as Codex and Claude.
 
-This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
+This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term
+maintainability is encouraged.
 
 ## Core Priorities
 
 1. Performance first.
 2. Reliability first.
-3. Keep behavior predictable under load and during failures (session restarts, reconnects, partial streams).
+3. Keep behavior predictable under load and during failures (session restarts, reconnects, partial
+   streams).
 
 If a tradeoff is required, choose correctness and robustness over short-term convenience.
 
 ## Maintainability
 
-Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
+Long-term maintainability is a core priority. Before adding new functionality, check whether shared
+logic should be extracted to a separate module. Duplicate logic across files is a code smell. Do not
+avoid changing existing code when a coherent shared design is clearer.
 
 ## Package Roles
 
-- `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.
-- `apps/web`: React/Vite UI. Owns session UX, conversation/event rendering, and client-side state. Connects to the server via WebSocket.
-- `packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic.
-- `packages/shared`: Shared runtime utilities consumed by both server and client applications. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
-- `packages/client-runtime`: Shared runtime package for sharing client code across web and mobile.
+- `apps/desktop`: Electron desktop shell and native integration.
+- `apps/web`: React/Vite renderer. Owns session UX, conversation/event rendering, and client-side
+  state. Connects to the local server through WebSocket.
+- `apps/server`: local Node.js WebSocket server. Wraps coding-agent harnesses, serves the React app,
+  and manages provider sessions.
+- `packages/contracts`: shared Effect/Schema schemas and TypeScript contracts. Keep this package
+  schema-only; it must not contain runtime logic.
+- `packages/shared`: shared runtime utilities consumed by server and client applications. Use
+  explicit subpath exports (for example `@t3tools/shared/git`); there is no barrel index.
+- `packages/client-runtime`: runtime shared by desktop renderer client code.
 
-## Reference Repos
+## Reference Repositories
 
 - Open-source Codex repo: https://github.com/openai/codex
-- Codex-Monitor (Tauri, feature-complete, strong reference implementation): https://github.com/Dimillian/CodexMonitor
+- Codex Monitor: https://github.com/Dimillian/CodexMonitor
 
-Use these as implementation references when designing protocol handling, UX flows, and operational safeguards.
-
-## Vendored Repositories
-
-This project vendors external repositories under `.repos/` as read-only reference material for coding
-agents.
-
-- Prefer examples and patterns from the vendored source code over generated guesses or web search results.
-- Do not edit files under `.repos/` unless explicitly asked.
-- Do not import from `.repos/`; application code must continue importing from normal package dependencies.
-- Manage vendored subtrees with `bun run sync:repos`; use `bun run sync:repos --repo <id>` to sync one
-  configured repository.
-- When updating a dependency with a configured vendored subtree, sync that subtree in the same change so
-  `.repos/` matches the installed dependency version.
-- When writing Effect code, read `.repos/effect-smol/LLMS.md` first and inspect `.repos/effect-smol/` for
-  examples of idiomatic usage, tests, module structure, and API design.
-- When writing relay infrastructure code with Alchemy, inspect `.repos/alchemy-effect/` for examples of
-  idiomatic usage, tests, module structure, and API design.
+Use these as implementation references for protocol handling, UX flows, and operational safeguards.
