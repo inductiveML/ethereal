@@ -151,7 +151,7 @@ import {
   nextProjectScriptId,
   projectScriptIdFromCommand,
 } from "~/projectScripts";
-import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import { newDraftId, newMessageId, newTaskRunId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -1012,6 +1012,9 @@ function ChatViewContent(props: ChatViewProps) {
   const startTaskHandoff = useAtomCommand(taskEnvironment.startHandoff, {
     reportFailure: false,
   });
+  const startTaskRun = useAtomCommand(taskEnvironment.startRun, {
+    reportFailure: false,
+  });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -1266,6 +1269,7 @@ function ChatViewContent(props: ChatViewProps) {
       goal: "",
       context: "",
       sessionThreadIds: [serverThread.id],
+      runs: [],
       createdAt: serverThread.createdAt,
       updatedAt: serverThread.updatedAt,
     };
@@ -4898,6 +4902,92 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const onStartTaskRun = useCallback(
+    async (input: {
+      readonly title: string;
+      readonly instructions: string;
+      readonly workers: ReadonlyArray<{
+        readonly label: string;
+        readonly modelSelection: ModelSelection;
+        readonly instructions: string;
+      }>;
+    }) => {
+      if (!activeTask || !activeThread || !isServerThread || !activeProject) return false;
+      const baseBranch = activeThreadBranch ?? gitStatusQuery.data?.refName ?? null;
+      if (!baseBranch) {
+        toastManager.add({
+          type: "error",
+          title: "Could not start parallel run",
+          description: "Select a Git branch before creating isolated workers.",
+        });
+        return false;
+      }
+      const runId = newTaskRunId();
+      const runTitle = input.title.trim() || `${activeTask.title} parallel run`;
+      const result = await startTaskRun({
+        environmentId,
+        input: {
+          taskId: activeTask.id,
+          runId,
+          sourceThreadId: activeThread.id,
+          title: runTitle,
+          instructions: input.instructions,
+          projectCwd: activeProject.workspaceRoot,
+          baseBranch,
+          runSetupScript: true,
+          workers: input.workers.map((worker, index) => {
+            const label = worker.label.trim() || `Worker ${index + 1}`;
+            const branchLabel = label
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "")
+              .slice(0, 32);
+            return {
+              threadId: newThreadId(),
+              messageId: newMessageId(),
+              label,
+              title: truncate(`${activeTask.title} · ${label}`),
+              modelSelection: worker.modelSelection,
+              runtimeMode,
+              interactionMode: "default" as const,
+              branch: `ethereal/run/${runId}/${index + 1}-${branchLabel || "worker"}`,
+              worktreePath: null,
+              instructions: worker.instructions,
+            };
+          }),
+        },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not start parallel run",
+            description: error instanceof Error ? error.message : "The parallel run failed.",
+          });
+        }
+        return false;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Parallel run started",
+        description: `${input.workers.length} isolated agents are working from ${baseBranch}.`,
+      });
+      return true;
+    },
+    [
+      activeProject,
+      activeTask,
+      activeThread,
+      activeThreadBranch,
+      environmentId,
+      gitStatusQuery.data?.refName,
+      isServerThread,
+      runtimeMode,
+      startTaskRun,
+    ],
+  );
+
   const getModelDisabledReason = useCallback(
     (instanceId: ProviderInstanceId, model: string): string | null => {
       if (!activeThread) {
@@ -5203,6 +5293,7 @@ function ChatViewContent(props: ChatViewProps) {
                       activeThreadId={activeThread.id}
                       disabled={activeEnvironmentUnavailable}
                       onHandoff={onStartTaskHandoff}
+                      onStartRun={onStartTaskRun}
                       onSave={onSaveTaskContext}
                       providers={providerStatuses}
                       sessions={activeTaskSessions}

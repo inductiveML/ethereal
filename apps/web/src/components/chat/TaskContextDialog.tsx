@@ -21,6 +21,7 @@ import {
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { TaskRunsPanel, type TaskRunStartInput } from "./TaskRunsPanel";
 
 interface TaskContextDialogProps {
   readonly task: OrchestrationTaskShell;
@@ -37,6 +38,7 @@ interface TaskContextDialogProps {
     readonly modelSelection: ModelSelection;
     readonly instructions: string;
   }) => Promise<boolean>;
+  readonly onStartRun: (input: TaskRunStartInput) => Promise<boolean>;
 }
 
 function selectableProviders(providers: ReadonlyArray<ServerProvider>) {
@@ -58,6 +60,7 @@ export const TaskContextDialog = memo(function TaskContextDialog({
   disabled = false,
   onSave,
   onHandoff,
+  onStartRun,
 }: TaskContextDialogProps) {
   const availableProviders = useMemo(() => selectableProviders(providers), [providers]);
   const defaultProvider =
@@ -193,6 +196,13 @@ export const TaskContextDialog = memo(function TaskContextDialog({
               ))}
             </div>
           </div>
+          <TaskRunsPanel
+            disabled={busy !== null}
+            onStartRun={onStartRun}
+            providers={availableProviders}
+            sessions={sessions}
+            task={task}
+          />
           <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
             <div>
               <div className="text-sm font-medium">Hand off to another agent</div>
