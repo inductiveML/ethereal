@@ -36,6 +36,9 @@ export type UpdateTaskContextInput = CommandInput<"task.context.update">;
 export type DeleteTaskInput = CommandInput<"task.delete">;
 export type StartTaskHandoffInput = CommandInput<"task.handoff.start">;
 export type StartTaskRunInput = CommandInput<"task.run.start">;
+export type CancelTaskRunInput = CommandInput<"task.run.cancel">;
+export type MarkTaskRunReviewReadyInput = CommandInput<"task.run.mark-review-ready">;
+export type CleanupTaskRunInput = CommandInput<"task.run.cleanup">;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -183,6 +186,41 @@ export const startTaskRun: (input: StartTaskRunInput) => CommandEffect = Effect.
   return yield* dispatch({
     ...input,
     type: "task.run.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const cancelTaskRun: (input: CancelTaskRunInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.cancelTaskRun",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.run.cancel",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const markTaskRunReviewReady: (input: MarkTaskRunReviewReadyInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.markTaskRunReviewReady")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "task.run.mark-review-ready",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const cleanupTaskRun: (input: CleanupTaskRunInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.cleanupTaskRun",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.run.cleanup",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

@@ -3,13 +3,19 @@ import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
+  type CancelTaskRunInput,
+  type CleanupTaskRunInput,
   type CreateTaskInput,
   type DeleteTaskInput,
+  type MarkTaskRunReviewReadyInput,
   type StartTaskHandoffInput,
   type StartTaskRunInput,
   type UpdateTaskContextInput,
+  cancelTaskRun,
+  cleanupTaskRun,
   createTask,
   deleteTask,
+  markTaskRunReviewReady,
   startTaskHandoff,
   startTaskRun,
   updateTaskContext,
@@ -17,8 +23,11 @@ import {
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 
 export type {
+  CancelTaskRunInput,
+  CleanupTaskRunInput,
   CreateTaskInput,
   DeleteTaskInput,
+  MarkTaskRunReviewReadyInput,
   StartTaskHandoffInput,
   StartTaskRunInput,
   UpdateTaskContextInput,
@@ -61,6 +70,24 @@ export function createTaskEnvironmentAtoms<R, E>(
     startRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:task:start-run",
       execute: startTaskRun,
+      scheduler,
+      concurrency,
+    }),
+    cancelRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:task:cancel-run",
+      execute: cancelTaskRun,
+      scheduler,
+      concurrency,
+    }),
+    markRunReviewReady: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:task:mark-run-review-ready",
+      execute: markTaskRunReviewReady,
+      scheduler,
+      concurrency,
+    }),
+    cleanupRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:task:cleanup-run",
+      execute: cleanupTaskRun,
       scheduler,
       concurrency,
     }),

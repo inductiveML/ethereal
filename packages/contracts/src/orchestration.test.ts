@@ -15,6 +15,7 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationTaskRun,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -37,6 +38,7 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
+const decodeOrchestrationTaskRun = Schema.decodeUnknownEffect(OrchestrationTaskRun);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
 
 function getOptionValue(
@@ -358,6 +360,41 @@ it.effect("decodes a bounded parallel task run command", () =>
       assert.strictEqual(parsed.workers.length, 2);
       assert.strictEqual(parsed.runSetupScript, true);
     }
+  }),
+);
+
+it.effect("decodes task run lifecycle commands", () =>
+  Effect.gen(function* () {
+    const commands = yield* Effect.forEach(
+      ["task.run.cancel", "task.run.mark-review-ready", "task.run.cleanup"] as const,
+      (type) =>
+        decodeOrchestrationCommand({
+          type,
+          commandId: `command-${type}`,
+          taskId: "task-1",
+          runId: "run-1",
+          createdAt: "2026-07-14T00:00:00.000Z",
+        }),
+    );
+    assert.deepStrictEqual(
+      commands.map((command) => command.type),
+      ["task.run.cancel", "task.run.mark-review-ready", "task.run.cleanup"],
+    );
+  }),
+);
+
+it.effect("defaults historical task runs to active lifecycle state", () =>
+  Effect.gen(function* () {
+    const run = yield* decodeOrchestrationTaskRun({
+      id: "run-legacy",
+      title: "Legacy run",
+      sourceThreadId: "thread-source",
+      instructions: "",
+      workers: [],
+      createdAt: "2026-07-14T00:00:00.000Z",
+    });
+    assert.strictEqual(run.status, "active");
+    assert.strictEqual(run.statusChangedAt, null);
   }),
 );
 

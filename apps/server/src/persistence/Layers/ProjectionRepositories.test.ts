@@ -51,6 +51,8 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
                 worktreePath: "/tmp/worktrees/reviewer",
               },
             ],
+            status: "active",
+            statusChangedAt: null,
             createdAt: "2026-07-14T00:00:00.000Z",
           },
         ],

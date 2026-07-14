@@ -424,6 +424,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               branch: worker.branch,
               worktreePath: worker.worktreePath!,
             })),
+            status: "active",
+            statusChangedAt: null,
             createdAt: command.createdAt,
           },
           updatedAt: command.createdAt,
@@ -486,6 +488,233 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(yield* decideCommandSequence({
           readModel: readModelWithRun,
           commands: workerCommands,
+        })),
+      ];
+    }
+
+    case "task.run.cancel": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const run = task.runs.find((candidate) => candidate.id === command.runId);
+      if (!run) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${command.runId}' does not exist on task '${task.id}'.`,
+        });
+      }
+      if (run.status !== "active") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' cannot be cancelled from status '${run.status}'.`,
+        });
+      }
+
+      const statusEvent: Omit<
+        Extract<OrchestrationEvent, { type: "task.run-status-changed" }>,
+        "sequence"
+      > = {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: task.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.run-status-changed",
+        payload: {
+          taskId: task.id,
+          runId: run.id,
+          status: "cancel-requested",
+          updatedAt: command.createdAt,
+        },
+      };
+      const readModelWithStatus = yield* projectEvent(readModel, {
+        ...statusEvent,
+        sequence: readModel.snapshotSequence + 1,
+      }).pipe(Effect.orDie);
+      const workerCommands = run.workers.flatMap((worker): OrchestrationCommand[] => {
+        const thread = readModel.threads.find((candidate) => candidate.id === worker.threadId);
+        if (!thread) return [];
+        return [
+          ...(thread.latestTurn?.state === "running"
+            ? [
+                {
+                  type: "thread.turn.interrupt" as const,
+                  commandId: command.commandId,
+                  threadId: thread.id,
+                  turnId: thread.latestTurn.turnId,
+                  createdAt: command.createdAt,
+                },
+              ]
+            : []),
+          ...(thread.session !== null && thread.session.status !== "stopped"
+            ? [
+                {
+                  type: "thread.session.stop" as const,
+                  commandId: command.commandId,
+                  threadId: thread.id,
+                  createdAt: command.createdAt,
+                },
+              ]
+            : []),
+        ];
+      });
+      return [
+        statusEvent,
+        ...(yield* decideCommandSequence({
+          readModel: readModelWithStatus,
+          commands: workerCommands,
+        })),
+      ];
+    }
+
+    case "task.run.mark-review-ready": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const run = task.runs.find((candidate) => candidate.id === command.runId);
+      if (!run) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${command.runId}' does not exist on task '${task.id}'.`,
+        });
+      }
+      if (run.status !== "active" && run.status !== "cancel-requested") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' cannot be marked review-ready from status '${run.status}'.`,
+        });
+      }
+      const workerThreads = run.workers.map((worker) =>
+        readModel.threads.find((candidate) => candidate.id === worker.threadId),
+      );
+      if (workerThreads.some((thread) => thread === undefined)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' has a missing worker thread.`,
+        });
+      }
+      const busyThread = workerThreads.find(
+        (thread) =>
+          thread?.latestTurn?.state === "running" ||
+          thread?.session?.status === "starting" ||
+          thread?.session?.status === "running",
+      );
+      if (busyThread) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' still has an active worker '${busyThread.id}'.`,
+        });
+      }
+
+      const statusEvent: Omit<
+        Extract<OrchestrationEvent, { type: "task.run-status-changed" }>,
+        "sequence"
+      > = {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: task.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.run-status-changed",
+        payload: {
+          taskId: task.id,
+          runId: run.id,
+          status: "review-ready",
+          updatedAt: command.createdAt,
+        },
+      };
+      const readModelWithStatus = yield* projectEvent(readModel, {
+        ...statusEvent,
+        sequence: readModel.snapshotSequence + 1,
+      }).pipe(Effect.orDie);
+      const stopCommands = workerThreads.flatMap((thread): OrchestrationCommand[] =>
+        thread && thread.session !== null && thread.session.status !== "stopped"
+          ? [
+              {
+                type: "thread.session.stop",
+                commandId: command.commandId,
+                threadId: thread.id,
+                createdAt: command.createdAt,
+              },
+            ]
+          : [],
+      );
+      return [
+        statusEvent,
+        ...(yield* decideCommandSequence({
+          readModel: readModelWithStatus,
+          commands: stopCommands,
+        })),
+      ];
+    }
+
+    case "task.run.cleanup": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const run = task.runs.find((candidate) => candidate.id === command.runId);
+      if (!run) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${command.runId}' does not exist on task '${task.id}'.`,
+        });
+      }
+      if (run.status !== "review-ready" && run.status !== "cancel-requested") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' cannot be cleaned from status '${run.status}'.`,
+        });
+      }
+      const workerThreads = run.workers.map((worker) =>
+        readModel.threads.find((candidate) => candidate.id === worker.threadId),
+      );
+      if (workerThreads.some((thread) => thread === undefined)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' has a missing worker thread.`,
+        });
+      }
+      const activeThread = workerThreads.find(
+        (thread) =>
+          thread?.latestTurn?.state === "running" ||
+          (thread?.session !== null && thread?.session.status !== "stopped"),
+      );
+      if (activeThread) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${run.id}' still has an active worker '${activeThread.id}'.`,
+        });
+      }
+      const statusEvent: Omit<
+        Extract<OrchestrationEvent, { type: "task.run-status-changed" }>,
+        "sequence"
+      > = {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: task.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.run-status-changed",
+        payload: {
+          taskId: task.id,
+          runId: run.id,
+          status: "cleaned",
+          updatedAt: command.createdAt,
+        },
+      };
+      const readModelWithStatus = yield* projectEvent(readModel, {
+        ...statusEvent,
+        sequence: readModel.snapshotSequence + 1,
+      }).pipe(Effect.orDie);
+      return [
+        statusEvent,
+        ...(yield* decideCommandSequence({
+          readModel: readModelWithStatus,
+          commands: run.workers.map(
+            (worker): OrchestrationCommand => ({
+              type: "thread.meta.update",
+              commandId: command.commandId,
+              threadId: worker.threadId,
+              worktreePath: null,
+            }),
+          ),
         })),
       ];
     }

@@ -713,6 +713,7 @@ const makeWsRpcLayer = (
           case "task.created":
           case "task.context-updated":
           case "task.run-started":
+          case "task.run-status-changed":
             return projectionSnapshotQuery.getTaskShellById(event.payload.taskId).pipe(
               Effect.map((task) =>
                 Option.map(task, (nextTask) => ({
@@ -1114,6 +1115,223 @@ const makeWsRpcLayer = (
           );
         });
 
+      const dispatchTaskRunCleanup = (
+        command: Extract<OrchestrationCommand, { type: "task.run.cleanup" }>,
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          const task = yield* projectionSnapshotQuery.getTaskShellById(command.taskId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to load task before cleaning parallel run"),
+            ),
+          );
+          if (!task) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Task '${command.taskId}' does not exist.`,
+            });
+          }
+          const run = task.runs.find((candidate) => candidate.id === command.runId);
+          if (!run) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Run '${command.runId}' does not exist on task '${task.id}'.`,
+            });
+          }
+          if (run.status !== "review-ready" && run.status !== "cancel-requested") {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Run '${run.id}' cannot be cleaned from status '${run.status}'.`,
+            });
+          }
+          const project = yield* projectionSnapshotQuery.getProjectShellById(task.projectId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to load project before cleaning parallel run"),
+            ),
+          );
+          if (!project) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Project '${task.projectId}' does not exist.`,
+            });
+          }
+
+          const removableWorkers: Array<(typeof run.workers)[number]> = [];
+          for (const worker of run.workers) {
+            const thread = yield* projectionSnapshotQuery.getThreadShellById(worker.threadId).pipe(
+              Effect.map(Option.getOrUndefined),
+              Effect.mapError((cause) =>
+                toDispatchCommandError(
+                  cause,
+                  `Failed to load worker '${worker.label}' before cleaning parallel run`,
+                ),
+              ),
+            );
+            if (!thread) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Run '${run.id}' has a missing worker thread '${worker.threadId}'.`,
+              });
+            }
+            if (
+              thread.latestTurn?.state === "running" ||
+              (thread.session !== null && thread.session.status !== "stopped")
+            ) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Run '${run.id}' still has an active worker '${worker.label}'.`,
+              });
+            }
+
+            const refs = yield* gitWorkflow
+              .listRefs({
+                cwd: project.workspaceRoot,
+                query: worker.branch,
+                refKind: "local",
+                limit: 100,
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(
+                    cause,
+                    `Failed to inspect branch '${worker.branch}' before cleaning parallel run`,
+                  ),
+                ),
+              );
+            const ref = refs.refs.find((candidate) => candidate.name === worker.branch);
+            if (!ref) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Worker branch '${worker.branch}' is missing; cleanup was not attempted.`,
+              });
+            }
+            if (ref.worktreePath === null) {
+              continue;
+            }
+            if (ref.worktreePath !== worker.worktreePath) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Worker branch '${worker.branch}' is checked out at '${ref.worktreePath}', not its recorded run worktree.`,
+              });
+            }
+
+            const status = yield* gitWorkflow
+              .localStatus({ cwd: worker.worktreePath })
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(
+                    cause,
+                    `Failed to inspect worker '${worker.label}' before cleaning parallel run`,
+                  ),
+                ),
+              );
+            if (!status.isRepo) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Worker worktree '${worker.worktreePath}' is not a Git repository; cleanup was not attempted.`,
+              });
+            }
+            if (status.hasWorkingTreeChanges) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Worker '${worker.label}' has uncommitted changes. Commit or discard them before cleaning the run.`,
+              });
+            }
+            removableWorkers.push(worker);
+          }
+
+          const removedWorkers: Array<(typeof run.workers)[number]> = [];
+          const rollbackRemovedWorktrees = () =>
+            Effect.forEach(
+              removedWorkers.toReversed(),
+              (worker) =>
+                gitWorkflow
+                  .createWorktree({
+                    cwd: project.workspaceRoot,
+                    refName: worker.branch,
+                    path: worker.worktreePath,
+                  })
+                  .pipe(
+                    Effect.tapCause((cause) =>
+                      Effect.logError(
+                        "failed to restore parallel run worktree after cleanup failure",
+                        {
+                          runId: run.id,
+                          branch: worker.branch,
+                          worktreePath: worker.worktreePath,
+                          cause,
+                        },
+                      ),
+                    ),
+                    Effect.ignoreCause,
+                  ),
+              { concurrency: 1, discard: true },
+            );
+
+          const program = Effect.gen(function* () {
+            for (const worker of removableWorkers) {
+              yield* gitWorkflow
+                .removeWorktree({
+                  cwd: project.workspaceRoot,
+                  path: worker.worktreePath,
+                  force: false,
+                })
+                .pipe(
+                  Effect.mapError((cause) =>
+                    toDispatchCommandError(
+                      cause,
+                      `Failed to remove worker worktree '${worker.worktreePath}'`,
+                    ),
+                  ),
+                );
+              removedWorkers.push(worker);
+            }
+
+            const result = yield* orchestrationEngine
+              .dispatch(command)
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to record parallel run cleanup"),
+                ),
+              );
+            yield* refreshGitStatus(project.workspaceRoot).pipe(Effect.ignoreCause);
+            return result;
+          });
+
+          return yield* program.pipe(
+            Effect.catchCause((cause) =>
+              rollbackRemovedWorktrees().pipe(
+                Effect.flatMap(() => Effect.fail(toBootstrapDispatchCommandCauseError(cause))),
+              ),
+            ),
+          );
+        });
+
+      const closeTaskRunTerminals = (command: {
+        readonly taskId: Extract<OrchestrationCommand, { type: "task.run.cancel" }>["taskId"];
+        readonly runId: Extract<OrchestrationCommand, { type: "task.run.cancel" }>["runId"];
+      }) =>
+        Effect.gen(function* () {
+          const task = yield* projectionSnapshotQuery
+            .getTaskShellById(command.taskId)
+            .pipe(Effect.map(Option.getOrUndefined));
+          const run = task?.runs.find((candidate) => candidate.id === command.runId);
+          if (!run) return;
+          yield* Effect.forEach(
+            run.workers,
+            (worker) =>
+              terminalManager.close({ threadId: worker.threadId }).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("failed to close parallel worker terminals", {
+                    runId: run.id,
+                    threadId: worker.threadId,
+                    error: error.message,
+                  }),
+                ),
+              ),
+            { concurrency: "unbounded", discard: true },
+          );
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to close terminals for parallel run lifecycle change", {
+              taskId: command.taskId,
+              runId: command.runId,
+              cause,
+            }),
+          ),
+        );
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
@@ -1122,13 +1340,15 @@ const makeWsRpcLayer = (
             ? dispatchBootstrapTurnStart(normalizedCommand)
             : normalizedCommand.type === "task.run.start"
               ? dispatchTaskRunStart(normalizedCommand)
-              : orchestrationEngine
-                  .dispatch(normalizedCommand)
-                  .pipe(
-                    Effect.mapError((cause) =>
-                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                    ),
-                  );
+              : normalizedCommand.type === "task.run.cleanup"
+                ? dispatchTaskRunCleanup(normalizedCommand)
+                : orchestrationEngine
+                    .dispatch(normalizedCommand)
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                      ),
+                    );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -1229,6 +1449,12 @@ const makeWsRpcLayer = (
                     }),
                   ),
                 );
+              }
+              if (
+                normalizedCommand.type === "task.run.cancel" ||
+                normalizedCommand.type === "task.run.mark-review-ready"
+              ) {
+                yield* closeTaskRunTerminals(normalizedCommand);
               }
               return result;
             }).pipe(

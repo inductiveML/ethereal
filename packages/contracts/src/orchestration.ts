@@ -225,12 +225,26 @@ export const OrchestrationTaskRunWorker = Schema.Struct({
 });
 export type OrchestrationTaskRunWorker = typeof OrchestrationTaskRunWorker.Type;
 
+export const OrchestrationTaskRunStatus = Schema.Literals([
+  "active",
+  "cancel-requested",
+  "review-ready",
+  "cleaned",
+]);
+export type OrchestrationTaskRunStatus = typeof OrchestrationTaskRunStatus.Type;
+
 export const OrchestrationTaskRun = Schema.Struct({
   id: TaskRunId,
   title: TrimmedNonEmptyString,
   sourceThreadId: ThreadId,
   instructions: Schema.String,
   workers: Schema.Array(OrchestrationTaskRunWorker),
+  status: OrchestrationTaskRunStatus.pipe(
+    Schema.withDecodingDefault(Effect.succeed("active" as const)),
+  ),
+  statusChangedAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
 });
 export type OrchestrationTaskRun = typeof OrchestrationTaskRun.Type;
@@ -644,6 +658,30 @@ const TaskRunStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const TaskRunCancelCommand = Schema.Struct({
+  type: Schema.Literal("task.run.cancel"),
+  commandId: CommandId,
+  taskId: TaskId,
+  runId: TaskRunId,
+  createdAt: IsoDateTime,
+});
+
+const TaskRunMarkReviewReadyCommand = Schema.Struct({
+  type: Schema.Literal("task.run.mark-review-ready"),
+  commandId: CommandId,
+  taskId: TaskId,
+  runId: TaskRunId,
+  createdAt: IsoDateTime,
+});
+
+const TaskRunCleanupCommand = Schema.Struct({
+  type: Schema.Literal("task.run.cleanup"),
+  commandId: CommandId,
+  taskId: TaskId,
+  runId: TaskRunId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
@@ -823,6 +861,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   TaskDeleteCommand,
   TaskHandoffStartCommand,
   TaskRunStartCommand,
+  TaskRunCancelCommand,
+  TaskRunMarkReviewReadyCommand,
+  TaskRunCleanupCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -849,6 +890,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   TaskDeleteCommand,
   TaskHandoffStartCommand,
   TaskRunStartCommand,
+  TaskRunCancelCommand,
+  TaskRunMarkReviewReadyCommand,
+  TaskRunCleanupCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -954,6 +998,7 @@ export const OrchestrationEventType = Schema.Literals([
   "task.created",
   "task.context-updated",
   "task.run-started",
+  "task.run-status-changed",
   "task.deleted",
   "thread.created",
   "thread.deleted",
@@ -1033,6 +1078,13 @@ export const TaskDeletedPayload = Schema.Struct({
 export const TaskRunStartedPayload = Schema.Struct({
   taskId: TaskId,
   run: OrchestrationTaskRun,
+  updatedAt: IsoDateTime,
+});
+
+export const TaskRunStatusChangedPayload = Schema.Struct({
+  taskId: TaskId,
+  runId: TaskRunId,
+  status: OrchestrationTaskRunStatus,
   updatedAt: IsoDateTime,
 });
 
@@ -1229,6 +1281,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("task.run-started"),
     payload: TaskRunStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.run-status-changed"),
+    payload: TaskRunStatusChangedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

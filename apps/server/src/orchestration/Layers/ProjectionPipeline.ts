@@ -57,7 +57,7 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import { legacyTaskIdForThread } from "../taskIds.ts";
-import { appendRetainedTaskRun } from "../taskRuns.ts";
+import { appendRetainedTaskRun, updateRetainedTaskRunStatus } from "../taskRuns.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -584,6 +584,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             yield* projectionTaskRepository.upsert({
               ...existing.value,
               runs: appendRetainedTaskRun(existing.value.runs, event.payload.run),
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+          case "task.run-status-changed": {
+            const existing = yield* projectionTaskRepository.getById(event.payload.taskId);
+            if (Option.isNone(existing)) return;
+            yield* projectionTaskRepository.upsert({
+              ...existing.value,
+              runs: updateRetainedTaskRunStatus(
+                existing.value.runs,
+                event.payload.runId,
+                event.payload.status,
+                event.payload.updatedAt,
+              ),
               updatedAt: event.payload.updatedAt,
             });
             return;

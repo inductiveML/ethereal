@@ -74,6 +74,9 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "task.delete":
     case "task.handoff.start":
     case "task.run.start":
+    case "task.run.cancel":
+    case "task.run.mark-review-ready":
+    case "task.run.cleanup":
       return {
         aggregateKind: "task",
         aggregateId: command.taskId,

@@ -15,6 +15,7 @@ import {
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
+  type OrchestrationTaskRun,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
@@ -191,6 +192,76 @@ const makeDefaultOrchestrationThreadShell = (
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...overrides,
+  };
+};
+
+const makeParallelRunCleanupFixture = (
+  suffix: string,
+  status: OrchestrationTaskRun["status"] = "review-ready",
+) => {
+  const now = "2026-01-01T00:00:00.000Z";
+  const projectId = ProjectId.make(`project-cleanup-${suffix}`);
+  const taskId = TaskId.make(`task-cleanup-${suffix}`);
+  const runId = TaskRunId.make(`run-cleanup-${suffix}`);
+  const projectCwd = `/tmp/project-cleanup-${suffix}`;
+  const workers = [1, 2].map((index) => ({
+    threadId: ThreadId.make(`thread-cleanup-${suffix}-${index}`),
+    label: `Worker ${index}`,
+    modelSelection: defaultModelSelection,
+    branch: `ethereal/run/${runId}/${index}-worker`,
+    worktreePath: `/tmp/worktree-cleanup-${suffix}-${index}`,
+  }));
+  return {
+    project: {
+      id: projectId,
+      title: "Cleanup project",
+      workspaceRoot: projectCwd,
+      defaultModelSelection,
+      scripts: [],
+      createdAt: now,
+      updatedAt: now,
+    },
+    task: {
+      id: taskId,
+      projectId,
+      title: "Cleanup task",
+      goal: "Safely clean worktrees",
+      context: "Preserve worker branches",
+      sessionThreadIds: workers.map((worker) => worker.threadId),
+      runs: [
+        {
+          id: runId,
+          title: "Cleanup run",
+          sourceThreadId: workers[0]!.threadId,
+          instructions: "",
+          workers,
+          status,
+          statusChangedAt: status === "active" ? null : now,
+          createdAt: now,
+        },
+      ],
+      createdAt: now,
+      updatedAt: now,
+    },
+    threads: new Map(
+      workers.map((worker) => [
+        worker.threadId,
+        makeDefaultOrchestrationThreadShell({
+          id: worker.threadId,
+          projectId,
+          taskId,
+          branch: worker.branch,
+          worktreePath: worker.worktreePath,
+          session: null,
+        }),
+      ]),
+    ),
+    workers,
+    projectId,
+    taskId,
+    runId,
+    projectCwd,
+    now,
   };
 };
 
@@ -4424,6 +4495,317 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ["/tmp/worktrees/1-runtime", "/tmp/worktrees/2-ui"],
         );
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("closes every worker terminal after cancelling a parallel run", () =>
+    Effect.gen(function* () {
+      const fixture = makeParallelRunCleanupFixture("cancel", "active");
+      const dispatch = vi.fn((_command: OrchestrationCommand) => Effect.succeed({ sequence: 4 }));
+      const close = vi.fn(
+        (_input: Parameters<TerminalManager.TerminalManager["Service"]["close"]>[0]) => Effect.void,
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          terminalManager: { close },
+          orchestrationEngine: { dispatch, readEvents: () => Stream.empty },
+          projectionSnapshotQuery: {
+            getTaskShellById: () => Effect.succeed(Option.some(fixture.task)),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.run.cancel",
+            commandId: CommandId.make("cmd-run-cancel"),
+            taskId: fixture.taskId,
+            runId: fixture.runId,
+            createdAt: fixture.now,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 4);
+      assert.equal(dispatch.mock.calls[0]?.[0].type, "task.run.cancel");
+      assert.deepEqual(
+        close.mock.calls.map(([input]) => input.threadId),
+        fixture.workers.map((worker) => worker.threadId),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to clean a parallel run when any worktree is dirty", () =>
+    Effect.gen(function* () {
+      const fixture = makeParallelRunCleanupFixture("dirty");
+      const removeWorktree = vi.fn(() => Effect.void);
+      const dispatch = vi.fn(() => Effect.succeed({ sequence: 1 }));
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: { isInsideWorkTree: () => Effect.succeed(true) },
+          gitManager: {
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: false,
+                isDefaultRef: false,
+                refName: "worker",
+                hasWorkingTreeChanges: true,
+                workingTree: {
+                  files: [{ path: "src/changed.ts", insertions: 1, deletions: 0 }],
+                  insertions: 1,
+                  deletions: 0,
+                },
+              }),
+          },
+          gitVcsDriver: {
+            listRefs: (input) =>
+              Effect.succeed({
+                refs: fixture.workers
+                  .filter((worker) => worker.branch === input.query)
+                  .map((worker) => ({
+                    name: worker.branch,
+                    current: false,
+                    isDefault: false,
+                    worktreePath: worker.worktreePath,
+                  })),
+                isRepo: true,
+                hasPrimaryRemote: false,
+                nextCursor: null,
+                totalCount: 1,
+              }),
+            removeWorktree,
+          },
+          orchestrationEngine: { dispatch, readEvents: () => Stream.empty },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(fixture.project)),
+            getTaskShellById: () => Effect.succeed(Option.some(fixture.task)),
+            getThreadShellById: (threadId) =>
+              Effect.succeed(Option.fromNullishOr(fixture.threads.get(threadId))),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.run.cleanup",
+            commandId: CommandId.make("cmd-run-cleanup-dirty"),
+            taskId: fixture.taskId,
+            runId: fixture.runId,
+            createdAt: fixture.now,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.include(result.failure.message, "uncommitted changes");
+      assert.equal(removeWorktree.mock.calls.length, 0);
+      assert.equal(dispatch.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("removes clean parallel worktrees without deleting their branches", () =>
+    Effect.gen(function* () {
+      const fixture = makeParallelRunCleanupFixture("clean");
+      const removeWorktree = vi.fn(
+        (_input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"]>[0]) =>
+          Effect.void,
+      );
+      const dispatch = vi.fn((command: OrchestrationCommand) =>
+        Effect.succeed({ sequence: command.type === "task.run.cleanup" ? 7 : 0 }),
+      );
+      const refreshStatus = vi.fn((_cwd: string) =>
+        Effect.succeed({
+          isRepo: true,
+          hasPrimaryRemote: false,
+          isDefaultRef: true,
+          refName: "main",
+          hasWorkingTreeChanges: false,
+          workingTree: { files: [], insertions: 0, deletions: 0 },
+          hasUpstream: false,
+          aheadCount: 0,
+          behindCount: 0,
+          pr: null,
+        }),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: { isInsideWorkTree: () => Effect.succeed(true) },
+          gitManager: {
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: false,
+                isDefaultRef: false,
+                refName: "worker",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+          },
+          gitVcsDriver: {
+            listRefs: (input) =>
+              Effect.succeed({
+                refs: fixture.workers
+                  .filter((worker) => worker.branch === input.query)
+                  .map((worker) => ({
+                    name: worker.branch,
+                    current: false,
+                    isDefault: false,
+                    worktreePath: worker.worktreePath,
+                  })),
+                isRepo: true,
+                hasPrimaryRemote: false,
+                nextCursor: null,
+                totalCount: 1,
+              }),
+            removeWorktree,
+          },
+          vcsStatusBroadcaster: { refreshStatus },
+          orchestrationEngine: { dispatch, readEvents: () => Stream.empty },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(fixture.project)),
+            getTaskShellById: () => Effect.succeed(Option.some(fixture.task)),
+            getThreadShellById: (threadId) =>
+              Effect.succeed(Option.fromNullishOr(fixture.threads.get(threadId))),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.run.cleanup",
+            commandId: CommandId.make("cmd-run-cleanup-clean"),
+            taskId: fixture.taskId,
+            runId: fixture.runId,
+            createdAt: fixture.now,
+          }),
+        ),
+      );
+
+      assert.equal(response.sequence, 7);
+      assert.deepEqual(
+        removeWorktree.mock.calls.map(([input]) => input),
+        fixture.workers.map((worker) => ({
+          cwd: fixture.projectCwd,
+          path: worker.worktreePath,
+          force: false,
+        })),
+      );
+      assert.equal(dispatch.mock.calls[0]?.[0].type, "task.run.cleanup");
+      assert.deepEqual(
+        refreshStatus.mock.calls.map(([cwd]) => cwd),
+        [fixture.projectCwd],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("restores removed worktrees when a later parallel cleanup step fails", () =>
+    Effect.gen(function* () {
+      const fixture = makeParallelRunCleanupFixture("rollback");
+      const removeWorktree = vi.fn(
+        (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"]>[0]) =>
+          input.path === fixture.workers[1]!.worktreePath
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "GitVcsDriver.removeWorktree",
+                  command: "git worktree remove",
+                  cwd: input.cwd,
+                  detail: "simulated second worktree failure",
+                }),
+              )
+            : Effect.void,
+      );
+      const createWorktree = vi.fn(
+        (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+          Effect.succeed({
+            worktree: { path: input.path ?? "/tmp/unexpected", refName: input.refName },
+          }),
+      );
+      const dispatch = vi.fn(() => Effect.succeed({ sequence: 1 }));
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: { isInsideWorkTree: () => Effect.succeed(true) },
+          gitManager: {
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: false,
+                isDefaultRef: false,
+                refName: "worker",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+          },
+          gitVcsDriver: {
+            listRefs: (input) =>
+              Effect.succeed({
+                refs: fixture.workers
+                  .filter((worker) => worker.branch === input.query)
+                  .map((worker) => ({
+                    name: worker.branch,
+                    current: false,
+                    isDefault: false,
+                    worktreePath: worker.worktreePath,
+                  })),
+                isRepo: true,
+                hasPrimaryRemote: false,
+                nextCursor: null,
+                totalCount: 1,
+              }),
+            createWorktree,
+            removeWorktree,
+          },
+          orchestrationEngine: { dispatch, readEvents: () => Stream.empty },
+          projectionSnapshotQuery: {
+            getProjectShellById: () => Effect.succeed(Option.some(fixture.project)),
+            getTaskShellById: () => Effect.succeed(Option.some(fixture.task)),
+            getThreadShellById: (threadId) =>
+              Effect.succeed(Option.fromNullishOr(fixture.threads.get(threadId))),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "task.run.cleanup",
+            commandId: CommandId.make("cmd-run-cleanup-rollback"),
+            taskId: fixture.taskId,
+            runId: fixture.runId,
+            createdAt: fixture.now,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assert.include(result.failure.message, "simulated second worktree failure");
+      assert.deepEqual(
+        removeWorktree.mock.calls.map(([input]) => input.path),
+        fixture.workers.map((worker) => worker.worktreePath),
+      );
+      assert.deepEqual(
+        createWorktree.mock.calls.map(([input]) => input),
+        [
+          {
+            cwd: fixture.projectCwd,
+            refName: fixture.workers[0]!.branch,
+            path: fixture.workers[0]!.worktreePath,
+          },
+        ],
+      );
+      assert.equal(dispatch.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
