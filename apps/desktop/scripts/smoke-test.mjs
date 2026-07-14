@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { resolveElectronLaunchCommand } from "./electron-launcher.mjs";
+import { makeSmokeEnvironment } from "./smoke-test-env.mjs";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const desktopDir = NodePath.resolve(__dirname, "..");
@@ -20,11 +21,7 @@ console.log("\nLaunching Electron smoke test...");
 const electronCommand = resolveElectronLaunchCommand([mainJs]);
 const child = NodeChildProcess.spawn(electronCommand.electronPath, electronCommand.args, {
   stdio: ["pipe", "pipe", "pipe"],
-  env: {
-    ...process.env,
-    VITE_DEV_SERVER_URL: "",
-    ELECTRON_ENABLE_LOGGING: "1",
-  },
+  env: makeSmokeEnvironment(process.env),
 });
 
 const readinessPatterns = [/backend ready/i, /main window created/i, /did-finish-load/i];
