@@ -6,187 +6,231 @@ Starting commit: `0b388b44c66ceb782c7c5408a65a9e0c78dd99a8`
 
 ## Summary
 
-Phase 2 adds an opt-in, first-class `claudePty` provider that runs the real interactive `claude`
-command under Ethereal's existing PTY service. Prompts travel through bracketed paste; assistant
-text and tool activity come from Claude JSONL; lifecycle and blocking permissions use authenticated
-loopback HTTP hooks; and the same provider PTY can be opened in the existing xterm terminal.
+Claude now has exactly one Ethereal runtime: the user's installed, subscription-authenticated
+interactive `claude` CLI running beneath `node-pty`. The Claude Agent SDK implementation, tests,
+driver, hidden text-generation adapter, package dependency, and transitive lockfile packages were
+removed.
 
-The Claude SDK provider remains available and remains the default. Claude PTY is disabled by
-default until the end-to-end subscription-backed manual smoke procedure is explicitly authorized
-and completed.
+The historical `claudeAgent` driver identifier remains intentionally. It now points exclusively to
+the PTY driver so upstream settings and durable threads continue to load without a data migration.
+The user-facing provider is simply **Claude**, with a **Subscription** badge. The temporary
+development-only `claudePty` identity was removed.
+
+Phase 2 also closes the major interactive gaps found during live testing:
+
+- `AskUserQuestion` renders and resolves through Ethereal's native question UI.
+- supervised tool calls use Ethereal's native approval cards;
+- startup works without relying on a `SessionStart` hook that Claude Code 2.1.209 does not emit for
+  injected HTTP settings;
+- prompts are pasted and submitted in separate PTY writes;
+- response completion tolerates JSONL flush lag;
+- resume cannot be completed by a stale `Stop` hook from an older turn;
+- interruption completes when Claude returns to its idle prompt; and
+- shutdown uses EOF instead of recording a synthetic `/exit` command.
 
 ## Baseline
 
-- Phase 1 was complete and green at `0b388b44c66ceb782c7c5408a65a9e0c78dd99a8`.
+- Phase 1 implementation head: `0b388b44c66ceb782c7c5408a65a9e0c78dd99a8`.
 - Node: `v24.5.0` (repository engine: `^24.13.1`; warning only).
-- Vite+: `v0.2.2`.
-- Claude Code: `2.1.208` at `/Users/avp/.local/bin/claude`.
-- `vp i --frozen-lockfile`: passed.
-- `vp check`: passed with the same nine pre-existing React nested-component warnings.
-- recursive typecheck: passed across 11 workspaces.
-- tests: passed, 150 files plus 2 skipped; 1,305 passed and 7 skipped.
-- desktop build: passed.
-- desktop smoke test: passed.
+- Vite+: `v0.2.2` at the start of Phase 2.
+- Claude Code during final live validation: `2.1.209`.
+- Claude authentication: `claude.ai`, first-party, Max subscription.
+- Phase 1 check, typecheck, tests, desktop build, and desktop smoke test were green before Phase 2.
 
-The initial sandboxed `claude auth status` probe reported logged out because the execution sandbox
-could not access the user's normal authentication context. The user separately supplied an official
-status result showing `claude.ai` authentication and a Max subscription. No generation was invoked.
+## Runtime architecture
 
-## Reference analysis
+```text
+Native composer
+    -> sanitized bracketed paste
+    -> separate Return write
+    -> interactive Claude PTY
 
-The implementation studied the
-[gigq/t3code PTY adapter at the requested commit](https://github.com/gigq/t3code/blob/cbe242c095c3bdfc4c2861f89c08f06c88f42069/apps/server/src/provider/Layers/ClaudePtyAdapter.ts).
-Ethereal reused its useful ideas—interactive PTY launch, native session IDs, bracketed paste, JSONL
-semantics—but replaced line-count polling, default-HOME assumptions, broad transcript scanning, and
-idle-only completion with byte offsets, effective-HOME isolation, bounded discovery, lifecycle hooks,
-prompt acknowledgement, and tool-aware completion.
+Claude JSONL transcript
+    -> bounded byte-offset tailer
+    -> semantic events
+    -> ProviderRuntimeEvent
 
-Official Claude Code hook and permission documentation was used for the HTTP hook settings and
-blocking PermissionRequest response shape.
+Authenticated loopback HTTP hooks
+    -> prompt correlation
+    -> lifecycle, approval, and AskUserQuestion bridge
+    -> existing Ethereal native UI
 
-## Implementation
+Same provider-owned PTY
+    -> TerminalManager
+    -> optional raw xterm escape hatch
+```
 
-### Added
+No assistant content is scraped from the TUI. Screen-reader output is used only for startup,
+attention-state detection, and post-interrupt idle-prompt detection.
 
-- `ClaudePtyDriver.ts`: provider registration, status, maintenance, terminal, attachment, and
-  provider-instance integration.
-- `ClaudePtyAdapter.ts`: PTY lifecycle, turn queue, prompt transport, canonical events, approvals,
-  recovery, resume, timeouts, and raw terminal registration.
-- `ClaudePtyProtocol.ts`: compatibility, arguments, safe environment, prompt encoding, readiness,
-  incremental JSONL framing, and semantic parsing.
-- `ClaudeHookServer.ts`: per-session loopback HTTP bridge.
-- `ClaudeTranscriptResolver.ts`: effective-HOME path resolution and bounded fallback.
-- `ClaudeTranscriptTailer.ts`: incremental byte tailer with watcher acceleration and polling.
-- Focused unit and fake-integration test files for every module above.
+## Removed
 
-### Changed
+### Claude Agent SDK implementation
 
-- Registered `claudePty` in built-in drivers, settings, model defaults, text-generation routing,
-  provider labels, icons, context-window display, and session presentation.
-- Kept the SDK implementation under the clear `Claude SDK` / `Legacy / API-backed` label.
-- Extended the provider session start contract with initial interaction mode.
-- Added Claude PTY raw diagnostic sources to canonical runtime contracts.
-- Extended `TerminalManager` so a provider-owned PTY can use the existing output, input, history,
-  resize, attach, and xterm surfaces without transferring process ownership.
-- Added an **Open raw Claude session** titlebar action when the same provider PTY is available.
+- `apps/server/src/provider/Drivers/ClaudeDriver.ts`
+- `apps/server/src/provider/Layers/ClaudeAdapter.ts`
+- `apps/server/src/provider/Layers/ClaudeAdapter.test.ts`
+- `apps/server/src/provider/Services/ClaudeAdapter.ts`
+- `apps/server/src/textGeneration/ClaudeTextGeneration.ts`
+- `apps/server/src/textGeneration/ClaudeTextGeneration.test.ts`
+- SDK-only provider registry, settings, model, UI, and lint-baseline references
 
-## Runtime behavior
+### Dependency and lockfile
 
-- Transcript polling fallback: 75 ms; filesystem notifications accelerate it.
-- Transcript native read size: at most 1 MiB; bounded drain yields between chunks.
-- Startup readiness timeout: 15 seconds, after which the process is preserved as needs-attention.
-- Prompt no-output warning: 30 seconds.
-- Hard turn timeout: 20 minutes.
-- Approval timeout: 2 minutes, fail-closed.
-- Graceful stop: `/exit`, then 1.5 second grace, SIGTERM, then bounded SIGKILL fallback.
-- Queue: one next turn while working.
-- Completion: hook/transcript stop plus prompt acknowledgement and zero tools in flight.
-- Subscription cost: unknown by design; no cost is synthesized.
+- Removed `@anthropic-ai/claude-agent-sdk` from `apps/server/package.json`.
+- Regenerated `pnpm-lock.yaml`, removing the SDK and its unused transitive graph.
+- Verified the SDK package is absent from `apps/server/node_modules` after install.
+- Verified built server, web, and desktop output contains no Claude Agent SDK import or label.
 
-Actual startup, prompt acknowledgement, and response latency were not measured because a generative
-manual smoke was not authorized.
+The `@anthropic-ai/claude-code` package name remains only in provider update metadata. It names the
+interactive CLI's installation package and is not the Agent SDK.
 
-## Gates
+## PTY reliability fixes
 
-| Gate                      | Status | Evidence                                                                                                                                                                                                                         |
-| ------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A: PTY transport          | PASS   | Fake adapter asserts interactive spawn and bracketed input; interrupt is Ctrl+C; provider-owned terminal tests assert output fan-out, input, resize, detach, and no provider-process kill; graceful/forced close is implemented. |
-| B: Semantic transcript    | PASS   | Parser/tailer tests cover partial UTF-8 JSONL, multiple records, replacement, bounded large reads, deduplication, assistant text, tools, results, failures, MCP, and subagents without terminal scraping.                        |
-| C: Turn correctness       | PASS   | Fake integration covers text/tool completion, prompt acknowledgement, unresolved tools, duplicate records, one-turn queue, interruption, no-output warning, hard timeout, and process-exit failure.                              |
-| D: Supervised permissions | PASS   | Real loopback dispatch and fake Claude integration cover token/session rejection, allow once, allow for session, deny, timeout/cancel, duplicate decisions, and no PTY `y`/`n` fallback.                                         |
-| E: Resume                 | PASS   | Resume tests assert the native session ID, `--resume`, provider/HOME cursor identity, durable byte offset, and no duplicate semantic replay.                                                                                     |
-| F: Raw escape hatch       | PASS   | The same fake provider PTY is registered with TerminalManager; xterm input/output/resize and detach-without-kill are tested; the UI action opens `claude-pty-raw`.                                                               |
-| G: No idle usage          | PASS   | Status uses only `--version`, `--help`, and `auth status`; the adapter never spawns a background prompt and hidden text-generation calls explicitly fail.                                                                        |
+### Readiness and prompt transport
 
-These are automated gates. The subscription-backed end-to-end manual smoke remains **NOT TESTED**,
-so Claude PTY was not promoted to the default provider.
+- Claude launches with `--ax-screen-reader` and a stable **Ethereal** session name.
+- Claude Code 2.1.209 did not emit the injected HTTP `SessionStart` hook in an isolated real PTY
+  probe, so the supported screen-reader idle prompt is the live startup signal.
+- Startup readiness is debounced for one second while the TUI and plugins settle.
+- Login, trust, update, and onboarding markers take precedence over idle-prompt detection.
+- Bracketed paste and Return are separate PTY writes; sending them together left prompts sitting in
+  the composer without submission.
+
+### Turn correlation and completion
+
+- The blocking `UserPromptSubmit` hook drains resume-time transcript residue before accepting a
+  prompt and records its native `prompt_id`.
+- `Stop` is accepted only when that ID matches the active Ethereal turn. A `Stop` received before
+  acknowledgement or with an older ID is ignored.
+- Transcript records timestamped before the current turn are ignored.
+- `Stop.last_assistant_message` supplies the final response if the JSONL text has not flushed yet.
+- Completion still requires prompt acknowledgement and no unresolved tool results.
+- Claude Code does not send `Stop` when the user presses Ctrl+C, so interruption completes when the
+  screen-reader idle prompt reappears.
+- Graceful session shutdown sends EOF. This avoids the durable local-command record and late hook
+  produced by `/exit`, then retains bounded SIGTERM/SIGKILL escalation.
+
+### Subscription and process safety
+
+- The built-in Claude instance removes Anthropic API keys, auth tokens, alternate base URLs, and
+  Bedrock/Vertex/Foundry selectors before launch, preventing accidental usage-billed routing.
+- Explicit custom instances preserve their configured environment for deliberate router or API CLI
+  setups, but still use the same PTY adapter.
+- Claude Code 2.1.200 is the minimum supported version because Ethereal requires correlated prompt
+  IDs and the interactive `manual` permission mode.
+
+## AskUserQuestion
+
+`AskUserQuestion` is intercepted with a blocking `PreToolUse` hook. Ethereal validates the payload,
+emits `user-input.requested`, renders the existing native question card, and returns the answers in
+Claude's expected `updatedInput.answers` map.
+
+- Question text is preserved as Claude's answer-map key.
+- Missing descriptions fall back to the option label.
+- Multi-select responses are de-duplicated and comma-joined.
+- Every question requires a non-empty answer.
+- Invalid payloads, timeouts, interruption, process exit, and session shutdown fail closed and
+  resolve the native request rather than leaving Claude blocked.
+- Other `PreToolUse` events are not implicitly approved.
+
+Live result: Claude displayed a native question card with **Alpha** and **Beta**; selecting **Beta**
+returned `ASK_USER_ANSWER: Beta` in the assistant response. Provider logs contained both
+`user-input.requested` and `user-input.resolved`.
 
 ## Automated validation
 
-Focused Claude PTY results from the final clean checkout state:
+| Command                                          | Result                                                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `vp check`                                       | Passed: 0 errors; 9 pre-existing React nested-component warnings                                  |
+| `vp run typecheck`                               | Passed across 11 workspaces                                                                       |
+| focused Claude protocol/adapter/user-input tests | Passed: 3 files, 36 tests                                                                         |
+| `vp test`                                        | Passed outside the restricted sandbox: 423 files passed, 2 skipped; 3,397 tests passed, 7 skipped |
+| `vp run test`                                    | Passed: 155 files passed, 2 skipped; 1,285 tests passed, 7 skipped                                |
+| `vp run build:desktop`                           | Passed; only existing source-map and chunk-size warnings                                          |
+| `vp run --filter @t3tools/desktop smoke-test`    | Passed; desktop readiness log observed                                                            |
+| `CI=true vp i`                                   | Passed; lockfile already up to date and SDK package absent                                        |
+| `git diff --check`                               | Passed                                                                                            |
 
-- Eight focused files passed with 126 tests.
-- The hook bridge's real loopback test passed outside the restricted sandbox.
-- The full repository suite passed 156 files with 2 skipped and 1,347 tests with 7 skipped.
-- `vp run typecheck` and `vp run -r typecheck` both passed across 11 workspaces.
-- `vp check` passed with 0 errors and the same 9 baseline warnings.
+The first restricted-sandbox `vp test` attempt failed because loopback binds and the user's GPG
+agent were denied. The required unrestricted rerun passed completely. The first non-interactive
+`vp i` invocation requested TTY confirmation for a modules-directory purge; rerunning with
+`CI=true` passed without changing the lockfile.
 
-## Manual testing
+## Live desktop smoke testing
 
-- `claude --version`: passed, `2.1.208`.
-- `claude --help`: passed; required interactive arguments are present.
-- `claude auth status`: user-reported `claude.ai` login with Max subscription; sandbox probe could
-  not observe that authentication context.
-- Generative desktop smoke: **NOT TESTED**. The task explicitly prohibits subscription usage unless
-  the user initiates that test; no Claude prompt was sent.
-- GUI raw terminal and native timeline smoke: **NOT TESTED** for the same reason.
+The final development app was launched against the authenticated Claude Max account and exercised
+through the real Electron UI.
 
-### Opt-in live smoke procedure
+1. Opened the local Ethereal repository and confirmed Claude provider status/model selection.
+2. Sent `Reply with exactly: ETHEREAL_CLAUDE_PTY_OK`; the native timeline rendered the exact reply.
+3. Triggered `AskUserQuestion`; selected **Beta** in the native card and received the exact selected
+   answer back from Claude.
+4. Switched to supervised mode and requested a harmless `printf` command. The native command
+   approval card appeared, **approve once** reached Claude, and the expected file content was
+   written.
+5. Opened the provider's raw Claude session in the terminal drawer and confirmed it was the same PTY.
+6. Created a normal shell terminal, ran `pwd`, and received the repository path.
+7. Split the terminal horizontally, created a second terminal, and ran `stty size`; the `16 45`
+   result confirmed split/resize propagation.
+8. Opened changed-file and diff views and confirmed current edits rendered.
+9. Restarted Ethereal and confirmed project/thread persistence.
+10. Resumed the existing native Claude session and received `RESUME_PTY_OK` without duplicated
+    semantic history.
+11. Started a long response, pressed **Stop**, and confirmed the UI left the working state. The
+    provider log recorded `turn.completed` with `state: "interrupted"` and
+    `interruptionCount: 1`.
+12. Inspected the persisted transcript after shutdown and confirmed no synthetic `/exit` command was
+    appended.
 
-This procedure is intentionally not automated. Run it only after the user explicitly authorizes
-Claude subscription usage:
+The live resume smoke originally exposed a real stale-hook race: a prior `/exit` record delivered a
+late `Stop` that completed the new turn. Prompt-ID correlation, timestamp filtering, transcript
+draining, and EOF shutdown fixed it. A subsequent live resume and fresh interrupt smoke passed.
 
-1. Confirm `claude --version` and `claude auth status` in the same environment used to launch
-   Ethereal.
-2. Enable Claude PTY, open a local project, create a thread, and select **Claude PTY**.
-3. Send `Reply with exactly: ethereal-ready`; confirm the exact native-timeline response and that
-   **Open raw Claude session** shows the same session.
-4. Ask Claude to read one harmless repository file; confirm a semantic tool card and result.
-5. Ask for one tiny reversible edit; confirm the file-change item and diff.
-6. In approval-required mode, request a harmless command, deny it, request it again, then allow it;
-   confirm both decisions reach Claude.
-7. Interrupt a running turn and confirm the canonical outcome is interrupted.
-8. Restart Ethereal, resume the same thread, confirm prior content is not duplicated, and send one
-   successful continuation turn.
-9. Trigger or simulate a login/trust/attention state, resolve it through the raw terminal, and
-   return to the native timeline.
-10. Revert the test edit and confirm no test-only change remains.
+## Preserved intentionally
 
-## Existing Claude SDK adapter
-
-The SDK adapter remains available, enabled by default, and labeled `Claude SDK` with a
-`Legacy / API-backed` badge. The new PTY provider is present but disabled by default. This is a
-deliberate non-cutover because the automated gates pass but the required live subscription-backed
-manual workflow has not been run.
+- `node-pty`, the PTY adapter, TerminalManager, xterm, terminal history/input/resize/split support,
+  and provider-owned raw terminal registration.
+- Claude JSONL discovery, bounded incremental tailing, semantic parsing, usage events, tools, and
+  durable resume cursors.
+- Provider-neutral runtime events, approvals, native user input, orchestration, projections, and
+  WebSocket contracts.
+- The `claudeAgent` compatibility identity for existing settings and durable threads.
+- Generic Claude CLI status, model, auth-status, and update metadata.
+- Codex and all other provider adapters.
+- Git worktrees, checkpoints, diffs, revert support, SSH, browser preview, and MCP.
 
 ## Known limitations and risks
 
-- Live Claude-to-Ethereal hook behavior has not been exercised against the authenticated account.
-- Structured `AskUserQuestion` is not bridged.
+- Claude CLI TUI, hook, and JSONL formats are external protocols and may drift. Compatibility is
+  live-validated against Claude Code 2.1.209 and fails closed below 2.1.200.
+- Startup and post-interrupt readiness depend on the screen-reader idle-prompt format because
+  injected `SessionStart` hooks were absent in 2.1.209.
 - Default/plan mode changes require restarting the native Claude session.
-- Attachments are passed as deterministic file references; binary image data is not pasted.
+- Image attachments are materialized as deterministic local path references; binary data is not
+  pasted into the TUI.
 - Remote Claude PTY over SSH is not implemented.
-- Compatibility is currently anchored to Claude Code 2.1.208 and the documented HTTP hook protocol.
-- The local Node version remains below the declared engine.
-- Nine unrelated React nested-component lint warnings predate Phase 2.
+- Claude PTY intentionally refuses hidden metadata-generation prompts; select another configured
+  provider for generated commit messages, PR copy, branch names, and thread titles.
+- The local Node version is below the repository's declared engine.
+- Nine unrelated React nested-component warnings predate Phase 2.
+- CI can validate the fake PTY, real loopback hook bridge, parser, tailer, and desktop harness, but it
+  cannot run a subscription-authenticated generative smoke without user credentials.
 
 ## Commit list
 
-- `7e137a2e` `feat: implement interactive Claude PTY runtime` — protocol, hooks, transcript
-  discovery/tailing, semantic parsing, lifecycle, approvals, recovery, and fake integration.
-- `46206cd3` `feat: expose provider-owned PTYs in terminal` — raw provider PTY ownership and terminal
-  behavior.
-- `1d87d58f` `feat: integrate Claude PTY provider` — driver, settings, orchestration, UI, and SDK
-  legacy label.
-- `docs: document Claude PTY architecture` — architecture and Phase 2 evidence.
+- `7e137a2e` `feat: implement interactive Claude PTY runtime` — PTY protocol, hooks, transcript
+  tailing, semantics, approvals, recovery, and tests.
+- `46206cd3` `feat: expose provider-owned PTYs in terminal` — raw provider PTY integration with the
+  existing terminal service.
+- `1d87d58f` `feat: integrate Claude PTY provider` — provider registration, settings,
+  orchestration, and UI integration.
+- `e87c2689` `docs: document Claude PTY architecture` — initial architecture and validation notes.
+- `85443a12` `refactor: make Claude PTY the sole Claude runtime` — SDK removal, compatibility
+  cutover, native AskUserQuestion, and PTY reliability fixes.
+- `docs: finalize Claude PTY validation report` — this final evidence report.
 
-## Final clean validation
+## Result
 
-- `rm -rf node_modules apps/*/node_modules packages/*/node_modules`: passed.
-- Bootstrap `pnpm install --frozen-lockfile`: passed; 812 packages restored from the local store in
-  8.16 seconds with no downloads. This was required only because `vp` is a project dependency and
-  therefore absent immediately after deleting root `node_modules`.
-- `vp i`: passed, already up to date, 0.32 seconds.
-- `vp check`: passed; 0 errors and 9 pre-existing React warnings.
-- `vp run typecheck`: passed across 11 workspaces.
-- `vp run -r typecheck`: passed across 11 workspaces.
-- Focused Claude PTY command: passed, 8 files and 126 tests in 1.50 seconds.
-- `vp run test`: passed, 156 files plus 2 skipped; 1,347 tests plus 7 skipped in 144.80 seconds.
-- `vp run build:desktop`: passed in 15.42 seconds. Vite reported only existing source-map and large
-  chunk warnings.
-- `vp run --filter @t3tools/desktop smoke-test`: first attempt failed because the restricted sandbox
-  blocked macOS LaunchServices registration (`lsregister`, error `-10822`); the required rerun with
-  normal macOS application-launch permission passed after observing the desktop readiness log.
-
-The clean install emitted the known engine warning because the machine has Node 24.5.0 while the
-repository declares Node `^24.13.1`. It did not affect any validation result.
+Claude in Ethereal is PTY-only, subscription-authenticated, natively interactive, and fully covered
+by automated and live desktop smoke tests. Phase 2 is complete.
