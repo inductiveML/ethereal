@@ -4,6 +4,7 @@ import {
   type OrchestrationTaskShell,
   type OrchestrationThreadShell,
   type ServerProvider,
+  type TaskRunId,
 } from "@t3tools/contracts";
 import { ArrowRightIcon, NetworkIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
@@ -39,6 +40,9 @@ interface TaskContextDialogProps {
     readonly instructions: string;
   }) => Promise<boolean>;
   readonly onStartRun: (input: TaskRunStartInput) => Promise<boolean>;
+  readonly onCancelRun: (runId: TaskRunId) => Promise<boolean>;
+  readonly onMarkRunReviewReady: (runId: TaskRunId) => Promise<boolean>;
+  readonly onCleanupRun: (runId: TaskRunId) => Promise<boolean>;
 }
 
 function selectableProviders(providers: ReadonlyArray<ServerProvider>) {
@@ -61,6 +65,9 @@ export const TaskContextDialog = memo(function TaskContextDialog({
   onSave,
   onHandoff,
   onStartRun,
+  onCancelRun,
+  onMarkRunReviewReady,
+  onCleanupRun,
 }: TaskContextDialogProps) {
   const availableProviders = useMemo(() => selectableProviders(providers), [providers]);
   const defaultProvider =
@@ -198,6 +205,9 @@ export const TaskContextDialog = memo(function TaskContextDialog({
           </div>
           <TaskRunsPanel
             disabled={busy !== null}
+            onCancelRun={onCancelRun}
+            onCleanupRun={onCleanupRun}
+            onMarkReviewReady={onMarkRunReviewReady}
             onStartRun={onStartRun}
             providers={availableProviders}
             sessions={sessions}

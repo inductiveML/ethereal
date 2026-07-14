@@ -22,6 +22,7 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TaskId,
+  type TaskRunId,
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import {
@@ -1013,6 +1014,15 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startTaskRun = useAtomCommand(taskEnvironment.startRun, {
+    reportFailure: false,
+  });
+  const cancelTaskRun = useAtomCommand(taskEnvironment.cancelRun, {
+    reportFailure: false,
+  });
+  const markTaskRunReviewReady = useAtomCommand(taskEnvironment.markRunReviewReady, {
+    reportFailure: false,
+  });
+  const cleanupTaskRun = useAtomCommand(taskEnvironment.cleanupRun, {
     reportFailure: false,
   });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
@@ -4988,6 +4998,108 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const onCancelTaskRun = useCallback(
+    async (runId: TaskRunId) => {
+      if (!activeTask) return false;
+      const result = await cancelTaskRun({
+        environmentId,
+        input: { taskId: activeTask.id, runId },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not stop parallel run",
+            description: error instanceof Error ? error.message : "The stop request failed.",
+          });
+        }
+        return false;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Workers stopping",
+        description: "Ethereal requested interruption and stopped each worker session.",
+      });
+      return true;
+    },
+    [activeTask, cancelTaskRun, environmentId],
+  );
+
+  const onMarkTaskRunReviewReady = useCallback(
+    async (runId: TaskRunId) => {
+      if (!activeTask) return false;
+      const result = await markTaskRunReviewReady({
+        environmentId,
+        input: { taskId: activeTask.id, runId },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not prepare run for review",
+            description: error instanceof Error ? error.message : "The lifecycle update failed.",
+          });
+        }
+        return false;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Run ready for review",
+        description: "Worker branches and worktrees remain available for inspection.",
+      });
+      return true;
+    },
+    [activeTask, environmentId, markTaskRunReviewReady],
+  );
+
+  const onCleanupTaskRun = useCallback(
+    async (runId: TaskRunId) => {
+      if (!activeTask) return false;
+      const localApi = readLocalApi();
+      if (!localApi) {
+        toastManager.add({
+          type: "error",
+          title: "Could not clean parallel run",
+          description: "The local confirmation service is unavailable.",
+        });
+        return false;
+      }
+      const confirmed = await localApi.dialogs.confirm(
+        [
+          "Remove this run's clean worker worktrees?",
+          "Worker branches and commits will be preserved.",
+          "Ethereal will refuse cleanup if any worktree has uncommitted changes.",
+        ].join("\n"),
+      );
+      if (!confirmed) return false;
+
+      const result = await cleanupTaskRun({
+        environmentId,
+        input: { taskId: activeTask.id, runId },
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: "Could not clean parallel run",
+            description: error instanceof Error ? error.message : "The cleanup failed.",
+          });
+        }
+        return false;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Worker worktrees cleaned",
+        description: "The run's branches and commits were preserved.",
+      });
+      return true;
+    },
+    [activeTask, cleanupTaskRun, environmentId],
+  );
+
   const getModelDisabledReason = useCallback(
     (instanceId: ProviderInstanceId, model: string): string | null => {
       if (!activeThread) {
@@ -5292,7 +5404,10 @@ function ChatViewContent(props: ChatViewProps) {
                     <TaskContextDialog
                       activeThreadId={activeThread.id}
                       disabled={activeEnvironmentUnavailable}
+                      onCancelRun={onCancelTaskRun}
+                      onCleanupRun={onCleanupTaskRun}
                       onHandoff={onStartTaskHandoff}
+                      onMarkRunReviewReady={onMarkTaskRunReviewReady}
                       onStartRun={onStartTaskRun}
                       onSave={onSaveTaskContext}
                       providers={providerStatuses}

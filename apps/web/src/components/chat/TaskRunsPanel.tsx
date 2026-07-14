@@ -4,12 +4,15 @@ import {
   type OrchestrationTaskShell,
   type OrchestrationThreadShell,
   type ServerProvider,
+  type TaskRunId,
 } from "@t3tools/contracts";
-import { GitForkIcon } from "lucide-react";
+import { CheckCheckIcon, GitForkIcon, OctagonXIcon, Trash2Icon } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { taskRunLifecyclePresentation } from "./TaskRunsPanel.logic";
 
 export interface TaskRunStartInput {
   readonly title: string;
@@ -48,19 +51,26 @@ export const TaskRunsPanel = memo(function TaskRunsPanel({
   providers,
   disabled,
   onStartRun,
+  onCancelRun,
+  onMarkReviewReady,
+  onCleanupRun,
 }: {
   readonly task: OrchestrationTaskShell;
   readonly sessions: ReadonlyArray<OrchestrationThreadShell>;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly disabled: boolean;
   readonly onStartRun: (input: TaskRunStartInput) => Promise<boolean>;
+  readonly onCancelRun: (runId: TaskRunId) => Promise<boolean>;
+  readonly onMarkReviewReady: (runId: TaskRunId) => Promise<boolean>;
+  readonly onCleanupRun: (runId: TaskRunId) => Promise<boolean>;
 }) {
   const [runTitle, setRunTitle] = useState(`${task.title} parallel run`);
   const [runInstructions, setRunInstructions] = useState("");
   const [runWorkers, setRunWorkers] = useState<RunWorkerDraft[]>(() =>
     initialRunWorkers(providers),
   );
-  const [busy, setBusy] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
+  const [busyRunId, setBusyRunId] = useState<TaskRunId | null>(null);
 
   useEffect(() => setRunTitle(`${task.title} parallel run`), [task.title]);
 
@@ -98,7 +108,7 @@ export const TaskRunsPanel = memo(function TaskRunsPanel({
         : [];
     });
     if (workers.length !== runWorkers.length) return;
-    setBusy(true);
+    setStartBusy(true);
     try {
       const succeeded = await onStartRun({
         title: runTitle.trim(),
@@ -110,7 +120,19 @@ export const TaskRunsPanel = memo(function TaskRunsPanel({
         setRunWorkers((current) => current.map((worker) => ({ ...worker, instructions: "" })));
       }
     } finally {
-      setBusy(false);
+      setStartBusy(false);
+    }
+  };
+
+  const runLifecycleAction = async (
+    runId: TaskRunId,
+    action: (runId: TaskRunId) => Promise<boolean>,
+  ) => {
+    setBusyRunId(runId);
+    try {
+      await action(runId);
+    } finally {
+      setBusyRunId(null);
     }
   };
 
@@ -123,37 +145,88 @@ export const TaskRunsPanel = memo(function TaskRunsPanel({
             {task.runs
               .toReversed()
               .slice(0, 3)
-              .map((run) => (
-                <div className="rounded-lg border border-border p-3" key={run.id}>
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="truncate font-medium">{run.title}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {run.workers.length} workers
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    {run.workers.map((worker) => {
-                      const session = sessions.find(
-                        (candidate) => candidate.id === worker.threadId,
-                      );
-                      const status =
-                        session?.session?.status ?? session?.latestTurn?.state ?? "preparing";
-                      return (
-                        <div
-                          className="flex items-center justify-between gap-3 text-xs"
-                          key={worker.threadId}
-                          title={worker.worktreePath}
+              .map((run) => {
+                const lifecycle = taskRunLifecyclePresentation(run, sessions);
+                const runBusy = busyRunId === run.id;
+                return (
+                  <div className="rounded-lg border border-border p-3" key={run.id}>
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate font-medium">{run.title}</span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Badge
+                          variant={
+                            run.status === "review-ready"
+                              ? "success"
+                              : run.status === "cancel-requested"
+                                ? "warning"
+                                : "secondary"
+                          }
                         >
-                          <span className="min-w-0 truncate">
-                            {worker.label} · {worker.branch}
-                          </span>
-                          <span className="shrink-0 text-muted-foreground">{status}</span>
-                        </div>
-                      );
-                    })}
+                          {lifecycle.label}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {run.workers.length} workers
+                        </span>
+                      </div>
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {run.workers.map((worker) => {
+                        const session = sessions.find(
+                          (candidate) => candidate.id === worker.threadId,
+                        );
+                        const status =
+                          session?.session?.status ?? session?.latestTurn?.state ?? "preparing";
+                        return (
+                          <div
+                            className="flex items-center justify-between gap-3 text-xs"
+                            key={worker.threadId}
+                            title={worker.worktreePath}
+                          >
+                            <span className="min-w-0 truncate">
+                              {worker.label} · {worker.branch}
+                            </span>
+                            <span className="shrink-0 text-muted-foreground">{status}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {lifecycle.canCancel || lifecycle.canMarkReviewReady || lifecycle.canCleanup ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {lifecycle.canCancel ? (
+                          <Button
+                            disabled={disabled || runBusy}
+                            onClick={() => void runLifecycleAction(run.id, onCancelRun)}
+                            size="sm"
+                            variant="secondary"
+                          >
+                            Stop workers <OctagonXIcon />
+                          </Button>
+                        ) : null}
+                        {lifecycle.canMarkReviewReady ? (
+                          <Button
+                            disabled={disabled || runBusy}
+                            onClick={() => void runLifecycleAction(run.id, onMarkReviewReady)}
+                            size="sm"
+                            variant="secondary"
+                          >
+                            Ready for review <CheckCheckIcon />
+                          </Button>
+                        ) : null}
+                        {lifecycle.canCleanup ? (
+                          <Button
+                            disabled={disabled || runBusy}
+                            onClick={() => void runLifecycleAction(run.id, onCleanupRun)}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            Clean worktrees <Trash2Icon />
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
           </div>
         </div>
       ) : null}
@@ -273,7 +346,7 @@ export const TaskRunsPanel = memo(function TaskRunsPanel({
           className="w-full sm:w-auto"
           disabled={
             disabled ||
-            busy ||
+            startBusy ||
             providers.length === 0 ||
             runTitle.trim().length === 0 ||
             runWorkers.some((worker) => worker.label.trim().length === 0 || !worker.model)
