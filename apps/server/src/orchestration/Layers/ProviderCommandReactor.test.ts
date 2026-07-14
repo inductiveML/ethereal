@@ -18,6 +18,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  TaskRunId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -55,6 +56,7 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { legacyTaskIdForThread } from "../taskIds.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -464,6 +466,59 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("starts every worker emitted by one parallel-run command", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const runId = TaskRunId.make("run-shared-command");
+    const workerIds = [ThreadId.make("thread-worker-1"), ThreadId.make("thread-worker-2")];
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "task.run.start",
+        commandId: CommandId.make("cmd-parallel-run"),
+        taskId: legacyTaskIdForThread(ThreadId.make("thread-1")),
+        runId,
+        sourceThreadId: ThreadId.make("thread-1"),
+        title: "Parallel smoke",
+        instructions: "Work independently.",
+        projectCwd: "/tmp/provider-project",
+        baseBranch: "main",
+        workers: workerIds.map((threadId, index) => ({
+          threadId,
+          messageId: asMessageId(`message-worker-${index + 1}`),
+          label: `Worker ${index + 1}`,
+          title: `Worker ${index + 1}`,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access" as const,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: `ethereal/run/${runId}/${index + 1}-worker`,
+          worktreePath: `/tmp/provider-worker-${index + 1}`,
+          instructions: "Return a status.",
+        })),
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.map((call) => call[0])).toEqual(workerIds);
+    expect(harness.startSession.mock.calls.map((call) => call[1])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: workerIds[0],
+          workspaceTrust: "app-created",
+        }),
+        expect.objectContaining({
+          threadId: workerIds[1],
+          workspaceTrust: "app-created",
+        }),
+      ]),
+    );
   });
 
   it("generates a thread title on the first turn", async () => {

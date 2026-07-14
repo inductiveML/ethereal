@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   advanceClaudePtyReadiness,
   buildClaudePtyLaunchSpec,
+  claudePtyOutputRequestsWorkspaceTrust,
   consumeClaudeTranscriptBytes,
   encodeClaudeBracketedPaste,
   initialClaudePtyReadiness,
@@ -215,6 +216,14 @@ describe("ClaudePtyProtocol", () => {
     });
 
     expect(output.state).toBe("needs-attention");
+  });
+
+  it("matches workspace trust prompts only for the exact app-created cwd", () => {
+    const output =
+      "Permission Required: Accessing workspace:\r\n/tmp/ethereal-worker\r\nQuick safety check: Is this a project you created or one you trust?\r\nEnter y/n:";
+
+    expect(claudePtyOutputRequestsWorkspaceTrust(output, "/tmp/ethereal-worker")).toBe(true);
+    expect(claudePtyOutputRequestsWorkspaceTrust(output, "/tmp/different-worker")).toBe(false);
   });
 
   it("tails JSONL by byte offset without losing split UTF-8 records", () => {

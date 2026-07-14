@@ -279,9 +279,23 @@ export type ClaudePtyReadinessSignal =
   | { readonly type: "process-exit"; readonly reason: string }
   | { readonly type: "failed"; readonly reason: string };
 
-function ptyOutputNeedsAttention(value: string): boolean {
+function plainClaudePtyOutput(value: string): string {
   const ansiSequence = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
-  const plain = value.replace(ansiSequence, "").toLowerCase();
+  return value.replace(ansiSequence, "").replaceAll("\r\n", "\n");
+}
+
+export function claudePtyOutputRequestsWorkspaceTrust(value: string, cwd: string): boolean {
+  const plain = plainClaudePtyOutput(value);
+  return (
+    plain.includes("Permission Required: Accessing workspace:") &&
+    plain.includes(cwd) &&
+    plain.includes("Is this a project you created or one you trust?") &&
+    plain.includes("Enter y/n:")
+  );
+}
+
+function ptyOutputNeedsAttention(value: string): boolean {
+  const plain = plainClaudePtyOutput(value).toLowerCase();
   return [
     "not logged in",
     "select login method",
@@ -293,8 +307,7 @@ function ptyOutputNeedsAttention(value: string): boolean {
 }
 
 function ptyOutputIsReady(value: string): boolean {
-  const ansiSequence = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
-  const plain = value.replace(ansiSequence, "").replaceAll("\r\n", "\n");
+  const plain = plainClaudePtyOutput(value);
   return plain.includes("\n Ethereal\n$");
 }
 

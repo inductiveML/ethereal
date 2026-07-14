@@ -61,6 +61,10 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  // App-created worktrees inherit trust from a project the user already
+  // opened. Provider adapters may use this hint to clear a redundant native
+  // workspace-trust gate without weakening prompts for ordinary folders.
+  workspaceTrust: Schema.optional(Schema.Literal("app-created")),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;

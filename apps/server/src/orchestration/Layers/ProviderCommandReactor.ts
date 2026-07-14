@@ -6,6 +6,7 @@ import {
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
+  type TaskId,
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
@@ -81,7 +82,9 @@ function mapProviderSessionStatusToOrchestrationStatus(
 }
 
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
-  event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+  event.commandId !== null
+    ? `command:${event.commandId}:thread:${event.payload.threadId}:event:${event.type}`
+    : `event:${event.eventId}`;
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -317,6 +320,12 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
+  const resolveTask = Effect.fnUntraced(function* (taskId: TaskId) {
+    return yield* projectionSnapshotQuery
+      .getTaskShellById(taskId)
+      .pipe(Effect.map(Option.getOrUndefined));
+  });
+
   const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly currentModelSelection: ModelSelection;
@@ -466,10 +475,18 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
+    const task = thread.taskId ? yield* resolveTask(thread.taskId) : undefined;
     const effectiveCwd = resolveThreadWorkspaceCwd({
       thread,
       projects: project ? [project] : [],
     });
+    const isAppCreatedRunWorktree =
+      thread.worktreePath !== null &&
+      task?.runs.some((run) =>
+        run.workers.some(
+          (worker) => worker.threadId === thread.id && worker.worktreePath === thread.worktreePath,
+        ),
+      );
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -483,6 +500,7 @@ const make = Effect.gen(function* () {
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         interactionMode: thread.interactionMode,
+        ...(isAppCreatedRunWorktree ? { workspaceTrust: "app-created" as const } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 

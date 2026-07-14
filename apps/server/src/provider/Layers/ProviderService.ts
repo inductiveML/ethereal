@@ -122,6 +122,7 @@ function toRuntimePayloadFromSession(
   session: ProviderSession,
   extra?: {
     readonly modelSelection?: unknown;
+    readonly workspaceTrust?: "app-created";
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
   },
@@ -132,6 +133,7 @@ function toRuntimePayloadFromSession(
     activeTurnId: session.activeTurnId ?? null,
     lastError: session.lastError ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
+    ...(extra?.workspaceTrust !== undefined ? { workspaceTrust: extra.workspaceTrust } : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
@@ -159,6 +161,17 @@ function readPersistedCwd(
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readPersistedWorkspaceTrust(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): "app-created" | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  return "workspaceTrust" in runtimePayload && runtimePayload.workspaceTrust === "app-created"
+    ? "app-created"
+    : undefined;
 }
 
 const dieOnMissingBindingInstanceId = (
@@ -258,6 +271,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     threadId: ThreadId,
     extra?: {
       readonly modelSelection?: unknown;
+      readonly workspaceTrust?: "app-created";
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
     },
@@ -388,6 +402,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const persistedWorkspaceTrust = readPersistedWorkspaceTrust(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
       const resumed = yield* adapter
@@ -397,6 +412,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           providerInstanceId: bindingInstanceId,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+          ...(persistedWorkspaceTrust ? { workspaceTrust: persistedWorkspaceTrust } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
@@ -412,6 +428,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* upsertSessionBinding(
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
+        persistedWorkspaceTrust ? { workspaceTrust: persistedWorkspaceTrust } : undefined,
       );
       return { adapter, session: resumed } as const;
     }).pipe(
@@ -552,6 +569,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? readPersistedCwd(persistedBinding.runtimePayload)
             : undefined);
+        const effectiveWorkspaceTrust =
+          input.workspaceTrust ??
+          (persistedBinding?.providerInstanceId === resolvedInstanceId
+            ? readPersistedWorkspaceTrust(persistedBinding.runtimePayload)
+            : undefined);
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
           "provider.resume_cursor.source":
@@ -579,6 +601,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+            ...(effectiveWorkspaceTrust !== undefined
+              ? { workspaceTrust: effectiveWorkspaceTrust }
+              : {}),
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
 
@@ -600,6 +625,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         });
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
+          ...(effectiveWorkspaceTrust ? { workspaceTrust: effectiveWorkspaceTrust } : {}),
         });
         return sessionWithInstance;
       }).pipe(

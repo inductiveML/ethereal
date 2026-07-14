@@ -47,6 +47,7 @@ import {
 import {
   advanceClaudePtyReadiness,
   buildClaudePtyLaunchSpec,
+  claudePtyOutputRequestsWorkspaceTrust,
   durableClaudeTranscriptOffset,
   encodeClaudeBracketedPaste,
   initialClaudePtyReadiness,
@@ -144,6 +145,7 @@ interface ClaudePtySessionContext {
   unsubscribeData: (() => void) | undefined;
   unsubscribeExit: (() => void) | undefined;
   readinessSettleTimer: ReturnType<typeof setTimeout> | undefined;
+  workspaceTrustAccepted: boolean;
 }
 
 export interface ClaudeRawTerminalRegistration {
@@ -1383,6 +1385,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       unsubscribeData: undefined,
       unsubscribeExit: undefined,
       readinessSettleTimer: undefined,
+      workspaceTrustAccepted: false,
     };
     updateResumeCursor(context);
     sessionsByThread.set(input.threadId, context);
@@ -1480,6 +1483,18 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     context.process = spawned;
     context.readiness = advanceClaudePtyReadiness(context.readiness, { type: "spawned" });
     context.unsubscribeData = spawned.onData((data) => {
+      const bufferedOutput = context.readiness.lastOutput + data;
+      if (
+        input.workspaceTrust === "app-created" &&
+        claudePtyOutputRequestsWorkspaceTrust(bufferedOutput, launch.cwd)
+      ) {
+        context.readiness = { state: "starting", lastOutput: "" };
+        if (!context.workspaceTrustAccepted) {
+          context.workspaceTrustAccepted = true;
+          bestEffortProcessWrite(context.process, "y\r");
+        }
+        return;
+      }
       context.readiness = advanceClaudePtyReadiness(context.readiness, {
         type: "pty-output",
         data,

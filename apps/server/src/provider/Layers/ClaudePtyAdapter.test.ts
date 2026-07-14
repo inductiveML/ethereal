@@ -286,6 +286,61 @@ describe("ClaudePtyAdapter", () => {
     }).pipe(Effect.scoped);
   });
 
+  it.effect("accepts Claude's workspace trust gate for an app-created worktree", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/tmp/ethereal-worktree",
+          workspaceTrust: "app-created",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+
+      harness.process.emitData(
+        "Permission Required: Accessing workspace:\r\n/tmp/ethereal-worktree\r\nQuick safety check: Is this a project you created or one you trust?\r\nEnter y/n:",
+      );
+      yield* settle;
+
+      assert.deepEqual(harness.process.writes, ["y\r"]);
+      harness.process.emitData(
+        "[Screen Reader Mode: on via flag]\r\nClaude Code v2.1.209\r\n Ethereal\r\n$\u001b[4G",
+      );
+      yield* Effect.promise(() => sleepReal(5));
+
+      const session = yield* Fiber.join(startFiber);
+      assert.equal(session.status, "ready");
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("leaves Claude's workspace trust gate interactive for ordinary folders", () => {
+    const harness = makeHarness({ readinessTimeoutMs: 2 });
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/tmp/untrusted-folder",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+
+      harness.process.emitData(
+        "Permission Required: Accessing workspace:\r\n/tmp/untrusted-folder\r\nQuick safety check: Is this a project you created or one you trust?\r\nEnter y/n:",
+      );
+      const session = yield* Fiber.join(startFiber);
+
+      assert.equal(session.status, "error");
+      assert.notInclude(harness.process.writes, "y\r");
+    }).pipe(Effect.scoped);
+  });
+
   it.effect("uses Stop.last_assistant_message when the JSONL text flush lags the hook", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
