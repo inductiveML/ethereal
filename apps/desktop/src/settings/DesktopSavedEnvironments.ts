@@ -23,6 +23,8 @@ interface PersistedSavedEnvironmentStorageRecord extends Omit<
   "desktopSsh"
 > {
   readonly desktopSsh?: PersistedSavedEnvironmentDesktopSsh;
+  /** Read-only compatibility for dropping records created by the removed hosted relay. */
+  readonly relayManaged?: { readonly relayUrl: string };
   readonly encryptedBearerToken?: string;
 }
 
@@ -206,7 +208,6 @@ function toPersistedSavedEnvironmentRecord(
   return {
     ...nextRecord,
     ...(record.desktopSsh ? { desktopSsh: record.desktopSsh } : {}),
-    ...(record.relayManaged ? { relayManaged: record.relayManaged } : {}),
   };
 }
 
@@ -222,10 +223,7 @@ function toSavedEnvironmentStorageRecord(
     createdAt: record.createdAt,
     lastConnectedAt: record.lastConnectedAt,
   };
-  const metadata = {
-    ...(record.desktopSsh ? { desktopSsh: record.desktopSsh } : {}),
-    ...(record.relayManaged ? { relayManaged: record.relayManaged } : {}),
-  };
+  const metadata = record.desktopSsh ? { desktopSsh: record.desktopSsh } : {};
   return Option.match(encryptedBearerToken, {
     onNone: () => ({ ...nextRecord, ...metadata }),
     onSome: (value) => ({ ...nextRecord, ...metadata, encryptedBearerToken: value }),
@@ -397,7 +395,9 @@ export const make = Effect.gen(function* () {
   return DesktopSavedEnvironments.of({
     getRegistry: readRegistryDocument(fileSystem, environment.savedEnvironmentRegistryPath).pipe(
       Effect.map((document) =>
-        document.records.map((record) => toPersistedSavedEnvironmentRecord(record)),
+        document.records
+          .filter((record) => record.relayManaged === undefined)
+          .map((record) => toPersistedSavedEnvironmentRecord(record)),
       ),
       Effect.withSpan("desktop.savedEnvironments.getRegistry"),
     ),
