@@ -28,6 +28,7 @@ interface ThreadTerminalUiState {
 
 // Keep the old storage key so existing drawer layout preferences migrate.
 const TERMINAL_UI_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+const PROVIDER_OWNED_TERMINAL_IDS = new Set(["claude-pty-raw"]);
 
 interface PersistedTerminalUiStateStoreState {
   terminalUiStateByThreadKey?: Record<string, ThreadTerminalUiState>;
@@ -46,9 +47,9 @@ export function migratePersistedTerminalUiStateStoreState(
   const persistedUiStateByThreadKey =
     candidate.terminalUiStateByThreadKey ?? candidate.terminalStateByThreadKey ?? {};
   const terminalUiStateByThreadKey = Object.fromEntries(
-    Object.entries(persistedUiStateByThreadKey).filter(([threadKey]) =>
-      parseScopedThreadKey(threadKey),
-    ),
+    Object.entries(persistedUiStateByThreadKey)
+      .filter(([threadKey]) => parseScopedThreadKey(threadKey))
+      .map(([threadKey, state]) => [threadKey, normalizeThreadTerminalUiState(state)]),
   );
 
   return { terminalUiStateByThreadKey };
@@ -63,7 +64,13 @@ function normalizeTerminalIds(terminalIds: string[]): string[] {
   const seen = new Set<string>();
   for (const id of terminalIds) {
     const trimmedId = id.trim();
-    if (trimmedId.length === 0 || seen.has(trimmedId)) continue;
+    if (
+      trimmedId.length === 0 ||
+      PROVIDER_OWNED_TERMINAL_IDS.has(trimmedId) ||
+      seen.has(trimmedId)
+    ) {
+      continue;
+    }
     seen.add(trimmedId);
     normalizedIds.push(trimmedId);
   }
@@ -770,7 +777,7 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
     },
     {
       name: TERMINAL_UI_STATE_STORAGE_KEY,
-      version: 4,
+      version: 5,
       storage: createJSONStorage(createTerminalUiStateStorage),
       migrate: migratePersistedTerminalUiStateStoreState,
       partialize: (state) => ({

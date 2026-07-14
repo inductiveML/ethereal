@@ -6,7 +6,7 @@ import {
   type ServerProvider,
   type TaskRunId,
 } from "@t3tools/contracts";
-import { ArrowRightIcon, NetworkIcon } from "lucide-react";
+import { ArrowRightIcon, ClipboardListIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -145,7 +145,7 @@ export const TaskContextDialog = memo(function TaskContextDialog({
                 />
               }
             >
-              <NetworkIcon />
+              <ClipboardListIcon />
             </DialogTrigger>
           }
         />

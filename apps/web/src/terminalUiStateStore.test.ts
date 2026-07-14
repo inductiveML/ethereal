@@ -212,6 +212,37 @@ describe("terminalUiStateStore actions", () => {
     });
   });
 
+  it("removes a persisted provider-owned Claude PTY terminal", () => {
+    const threadKey = scopedThreadKey(THREAD_REF);
+    const migrated = migratePersistedTerminalUiStateStoreState(
+      {
+        terminalUiStateByThreadKey: {
+          [threadKey]: {
+            terminalOpen: true,
+            terminalHeight: 320,
+            terminalIds: ["claude-pty-raw", "term-1"],
+            activeTerminalId: "claude-pty-raw",
+            terminalGroups: [
+              { id: "group-claude", terminalIds: ["claude-pty-raw"] },
+              { id: "group-term-1", terminalIds: ["term-1"] },
+            ],
+            activeTerminalGroupId: "group-claude",
+          },
+        },
+      },
+      4,
+    );
+
+    expect(migrated.terminalUiStateByThreadKey?.[threadKey]).toEqual({
+      terminalOpen: true,
+      terminalHeight: 320,
+      terminalIds: ["term-1"],
+      activeTerminalId: "term-1",
+      terminalGroups: [{ id: "group-term-1", terminalIds: ["term-1"] }],
+      activeTerminalGroupId: "group-term-1",
+    });
+  });
+
   it("resets to default and clears persisted entry when closing the last terminal", () => {
     const store = useTerminalUiStateStore.getState();
     store.newTerminal(THREAD_REF, "terminal-only");
@@ -260,6 +291,27 @@ describe("terminalUiStateStore actions", () => {
       { id: "group-term-a", terminalIds: ["term-a"] },
       { id: "group-term-b", terminalIds: ["term-b"] },
     ]);
+  });
+
+  it("never exposes the provider-owned Claude PTY as a user terminal", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.reconcileTerminalIds(THREAD_REF, ["claude-pty-raw"]);
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalIds,
+    ).toEqual([]);
+
+    store.setTerminalOpen(THREAD_REF, true);
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalIds,
+    ).toEqual([DEFAULT_THREAD_TERMINAL_ID]);
   });
 
   it("does not import a closed panel terminal from stale metadata", () => {

@@ -36,10 +36,10 @@ describe("VcsProjectConfig", () => {
         const config = yield* VcsProjectConfig.VcsProjectConfig;
         const kind = yield* config.resolveKind({
           cwd: "/repo",
-          requestedKind: "jj",
+          requestedKind: "git",
         });
 
-        assert.equal(kind, "jj");
+        assert.equal(kind, "git");
       }),
     );
   });
@@ -59,13 +59,13 @@ describe("VcsProjectConfig", () => {
         yield* fileSystem.writeFileString(
           path.join(configDir, "vcs.json"),
           // @effect-diagnostics-next-line preferSchemaOverJson:off
-          JSON.stringify({ vcs: { kind: "jj" } }),
+          JSON.stringify({ vcs: { kind: "git" } }),
         );
 
         const config = yield* VcsProjectConfig.VcsProjectConfig;
         const kind = yield* config.resolveKind({ cwd: nested });
 
-        assert.equal(kind, "jj");
+        assert.equal(kind, "git");
       }),
     );
   });
@@ -89,13 +89,13 @@ describe("VcsProjectConfig", () => {
         yield* fileSystem.writeFileString(
           path.join(configDir, "vcs.json"),
           // @effect-diagnostics-next-line preferSchemaOverJson:off
-          JSON.stringify({ vcs: { kind: "jj" } }),
+          JSON.stringify({ vcs: { kind: "git" } }),
         );
 
         const config = yield* VcsProjectConfig.VcsProjectConfig;
         const kind = yield* config.resolveKind({ cwd });
 
-        assert.equal(kind, "jj");
+        assert.equal(kind, "git");
         const failedCandidate = path.join(cwd, ".t3code", "vcs.json");
         const [error] = messages[0] as ReadonlyArray<unknown>;
         assert.instanceOf(error, VcsProjectConfig.VcsProjectConfigError);

@@ -19,11 +19,7 @@ import * as Stream from "effect/Stream";
 
 import * as PtyAdapter from "../../terminal/PtyAdapter.ts";
 import type { ClaudeHookInput, ClaudeHookResponse } from "./ClaudeHookServer.ts";
-import {
-  makeClaudePtyAdapter,
-  type ClaudePtyAdapterOptions,
-  type ClaudeRawTerminalRegistration,
-} from "./ClaudePtyAdapter.ts";
+import { makeClaudePtyAdapter, type ClaudePtyAdapterOptions } from "./ClaudePtyAdapter.ts";
 import type { ClaudeTranscriptTailer } from "./ClaudeTranscriptTailer.ts";
 import type { ClaudeTranscriptCursor } from "./ClaudePtyProtocol.ts";
 
@@ -74,7 +70,6 @@ function makeHarness(overrides: Partial<ClaudePtyAdapterOptions> = {}) {
   let onHook: ((hook: ClaudeHookInput) => Promise<ClaudeHookResponse>) | undefined;
   let onTranscriptRecord: ((record: Record<string, unknown>) => void | Promise<void>) | undefined;
   let transcriptPolls = 0;
-  const rawRegistrations: ClaudeRawTerminalRegistration[] = [];
   const initialTranscriptCursors: Array<ClaudeTranscriptCursor | undefined> = [];
 
   const options: ClaudePtyAdapterOptions = {
@@ -103,9 +98,6 @@ function makeHarness(overrides: Partial<ClaudePtyAdapterOptions> = {}) {
         getCursor: () => input.initialCursor ?? { offset: 0, pending: new Uint8Array() },
       } satisfies ClaudeTranscriptTailer;
     },
-    registerRawTerminal: async (input) => {
-      rawRegistrations.push(input);
-    },
     readinessTimeoutMs: 1_000,
     readinessSettleMs: 1,
     approvalTimeoutMs: 1_000,
@@ -122,7 +114,6 @@ function makeHarness(overrides: Partial<ClaudePtyAdapterOptions> = {}) {
   return {
     process,
     spawns,
-    rawRegistrations,
     getOnHook: () => onHook,
     getOnTranscriptRecord: () => onTranscriptRecord,
     getTranscriptPolls: () => transcriptPolls,
@@ -183,9 +174,6 @@ describe("ClaudePtyAdapter", () => {
           (session.resumeCursor as { nativeSessionId: string }).nativeSessionId,
         sessionId,
       );
-      assert.equal(harness.rawRegistrations.length, 1);
-      assert.strictEqual(harness.rawRegistrations[0]!.process, harness.process);
-
       const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
       assert.deepEqual(harness.process.writes.slice(-2), ["\u001b[200~hello\u001b[201~", "\r"]);
       yield* Effect.promise(async () => {
@@ -917,7 +905,7 @@ describe("ClaudePtyAdapter", () => {
     }).pipe(Effect.scoped);
   });
 
-  it.effect("preserves an unready PTY as a raw attention surface", () => {
+  it.effect("preserves an unready hidden PTY for recovery", () => {
     const harness = makeHarness({ readinessTimeoutMs: 2 });
     return Effect.gen(function* () {
       const adapter = yield* harness.make;
@@ -929,8 +917,7 @@ describe("ClaudePtyAdapter", () => {
       });
 
       assert.equal(session.status, "error");
-      assert.match(session.lastError ?? "", /raw Claude session/i);
-      assert.equal(harness.rawRegistrations.length, 1);
+      assert.match(session.lastError ?? "", /system terminal/i);
       assert.deepEqual(harness.process.kills, []);
       const rejected = yield* adapter
         .sendTurn({ threadId: THREAD_ID, input: "do not paste yet" })

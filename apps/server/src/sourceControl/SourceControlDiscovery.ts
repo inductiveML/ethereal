@@ -47,14 +47,6 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
     implemented: true,
     installHint: "Install Git from https://git-scm.com/downloads or with your package manager.",
   },
-  {
-    kind: "jj",
-    label: "Jujutsu",
-    executable: "jj",
-    versionArgs: ["--version"],
-    implemented: false,
-    installHint: "Install Jujutsu with `brew install jj` or from https://github.com/jj-vcs/jj.",
-  },
 ];
 
 export class SourceControlDiscovery extends Context.Service<

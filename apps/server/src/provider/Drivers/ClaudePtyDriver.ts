@@ -16,7 +16,6 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
-import * as TerminalManager from "../../terminal/Manager.ts";
 import * as PtyAdapter from "../../terminal/PtyAdapter.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudePtyAdapter } from "../Layers/ClaudePtyAdapter.ts";
@@ -75,8 +74,7 @@ export type ClaudePtyDriverEnv =
   | Path.Path
   | PtyAdapter.PtyAdapter
   | ServerConfig
-  | ServerSettingsService
-  | TerminalManager.TerminalManager;
+  | ServerSettingsService;
 
 const unsupportedTextGeneration = (): TextGeneration["Service"] => {
   const fail = (
@@ -133,9 +131,6 @@ export const ClaudePtyDriver: ProviderDriver<ClaudeSettings, ClaudePtyDriverEnv>
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const serverConfig = yield* ServerConfig;
-      const terminalManager = yield* TerminalManager.TerminalManager;
-      const runtimeContext = yield* Effect.context<never>();
-      const runPromise = Effect.runPromiseWith(runtimeContext);
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const effectiveConfig = { ...config, enabled } satisfies ClaudeSettings;
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
@@ -157,8 +152,6 @@ export const ClaudePtyDriver: ProviderDriver<ClaudeSettings, ClaudePtyDriverEnv>
       const adapter = yield* makeClaudePtyAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
-        registerRawTerminal: (input) =>
-          runPromise(terminalManager.registerExternal(input)).then(() => undefined),
         subscriptionOnly,
         resolveAttachmentPath: (attachment) =>
           resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),

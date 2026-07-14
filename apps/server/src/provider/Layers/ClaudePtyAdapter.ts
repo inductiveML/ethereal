@@ -72,7 +72,6 @@ import {
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
 const DEFAULT_INSTANCE_ID = ProviderInstanceId.make("claudeAgent");
-const RAW_TERMINAL_ID = "claude-pty-raw";
 const HOOK_TOKEN_ENV = "ETHEREAL_CLAUDE_HOOK_TOKEN";
 const CTRL_C = "\u0003";
 const CTRL_D = "\u0004";
@@ -148,16 +147,6 @@ interface ClaudePtySessionContext {
   workspaceTrustAccepted: boolean;
 }
 
-export interface ClaudeRawTerminalRegistration {
-  readonly threadId: ThreadId;
-  readonly terminalId: string;
-  readonly cwd: string;
-  readonly cols: number;
-  readonly rows: number;
-  readonly label: string;
-  readonly process: PtyAdapter.PtyProcess;
-}
-
 export interface ClaudePtyAdapterOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
@@ -165,7 +154,6 @@ export interface ClaudePtyAdapterOptions {
   readonly now?: () => string;
   readonly hookServerFactory?: ClaudeHookServerFactory;
   readonly transcriptTailerFactory?: typeof startClaudeTranscriptTailer;
-  readonly registerRawTerminal?: (input: ClaudeRawTerminalRegistration) => Promise<void>;
   readonly readinessTimeoutMs?: number;
   readonly readinessSettleMs?: number;
   readonly approvalTimeoutMs?: number;
@@ -707,7 +695,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
           turnId: turn.turnId,
           payload: {
             message:
-              "Claude has not acknowledged the submitted prompt. Open the raw Claude session to inspect login, trust, update, or onboarding state.",
+              "Claude has not acknowledged the submitted prompt. Complete Claude login, trust, update, or onboarding in a system terminal, then restart this session.",
           },
           providerRefs: {},
         }),
@@ -1536,27 +1524,6 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     context.unsubscribeExit = spawned.onExit((event) => {
       void runPromise(handleProcessExit(context, event));
     });
-    if (options.registerRawTerminal) {
-      yield* Effect.tryPromise({
-        try: () =>
-          options.registerRawTerminal!({
-            threadId: input.threadId,
-            terminalId: RAW_TERMINAL_ID,
-            cwd: launch.cwd,
-            cols: 120,
-            rows: 36,
-            label: "Claude raw session",
-            process: spawned,
-          }),
-        catch: (cause) =>
-          new ProviderAdapterProcessError({
-            provider: PROVIDER,
-            threadId: input.threadId,
-            detail: "Failed to register the raw Claude PTY terminal.",
-            cause,
-          }),
-      }).pipe(Effect.tapError(() => stopSessionInternal(context, false)));
-    }
     yield* emit({
       type: "session.started",
       ...stamp(),
@@ -1578,7 +1545,6 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
           cwd: launch.cwd,
           ...(modelSelection?.model ? { model: modelSelection.model } : {}),
           runtimeMode: input.runtimeMode,
-          rawTerminalId: RAW_TERMINAL_ID,
         },
       },
       providerRefs: {},
@@ -1611,7 +1577,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         ...context.session,
         status: "error",
         lastError:
-          "Claude did not report a ready session. Open the raw Claude session to complete login, trust, update, or onboarding.",
+          "Claude did not report a ready session. Complete Claude login, trust, update, or onboarding in a system terminal, then restart this session.",
         updatedAt: now(),
       };
       yield* emit({
@@ -1645,7 +1611,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         provider: PROVIDER,
         method: "turn/start",
         detail:
-          "Claude is not ready for native composer input. Open the raw Claude session and resolve the attention state first.",
+          "Claude is not ready for native composer input. Resolve Claude setup in a system terminal, then restart this session.",
       });
     }
     const turnId = TurnId.make(idFactory());

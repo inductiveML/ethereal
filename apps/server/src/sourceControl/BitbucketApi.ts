@@ -821,7 +821,7 @@ export const make = Effect.gen(function* () {
     // an official checkout CLI. This provider-local path uses GitVcsDriver as a
     // narrow escape hatch to materialize Bitbucket PR refs. Do not generalize this
     // as the source-control provider model: if we support non-Git-compatible
-    // hosting providers or native JJ/Sapling checkout flows, move this into a
+    // hosting providers or non-Git checkout flows, move this into a
     // VCS-specific change-request checkout capability.
     checkoutPullRequest: (input) =>
       Effect.gen(function* () {

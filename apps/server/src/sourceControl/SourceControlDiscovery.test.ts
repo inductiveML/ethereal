@@ -124,10 +124,7 @@ it.effect("reports implemented tools separately from locally available executabl
         implemented: item.implemented,
         status: item.status,
       })),
-      [
-        { kind: "git", implemented: true, status: "available" },
-        { kind: "jj", implemented: false, status: "missing" },
-      ],
+      [{ kind: "git", implemented: true, status: "available" }],
     );
     assert.deepStrictEqual(
       result.sourceControlProviders.map((item) => ({

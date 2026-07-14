@@ -41,7 +41,7 @@ describe("resolveSidebarStageBadgeLabel", () => {
   it("returns Nightly for nightly primary server versions", () => {
     expect(
       resolveSidebarStageBadgeLabel({
-        primaryServerVersion: "0.0.28-nightly.20260616.12",
+        primaryServerVersion: "0.1.0-nightly.20260616.12",
         fallbackStageLabel: "Alpha",
       }),
     ).toBe("Nightly");
@@ -68,7 +68,7 @@ describe("resolveSidebarStageBadgeLabel", () => {
   it("returns the fallback label for malformed nightly prerelease versions", () => {
     expect(
       resolveSidebarStageBadgeLabel({
-        primaryServerVersion: "0.0.28-nightly.20260616",
+        primaryServerVersion: "0.1.0-nightly.20260616",
         fallbackStageLabel: "Alpha",
       }),
     ).toBe("Alpha");

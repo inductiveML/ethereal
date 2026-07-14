@@ -303,11 +303,11 @@ it.layer(
 
       const snapshot = yield* manager.registerExternal({
         threadId: "thread-1",
-        terminalId: "claude-pty-raw",
+        terminalId: "external-session",
         cwd: process.cwd(),
         cols: 120,
         rows: 36,
-        label: "Claude raw session",
+        label: "External session",
         process: externalProcess,
       });
       externalProcess.emitData("Claude output\r\n");
@@ -316,18 +316,18 @@ it.layer(
       );
       yield* manager.resize({
         threadId: "thread-1",
-        terminalId: "claude-pty-raw",
+        terminalId: "external-session",
         cols: 140,
         rows: 42,
       });
       yield* manager.write({
         threadId: "thread-1",
-        terminalId: "claude-pty-raw",
+        terminalId: "external-session",
         data: "raw input",
       });
-      yield* manager.close({ threadId: "thread-1", terminalId: "claude-pty-raw" });
+      yield* manager.close({ threadId: "thread-1", terminalId: "external-session" });
 
-      assert.equal(snapshot.label, "Claude raw session");
+      assert.equal(snapshot.label, "External session");
       assert.equal(snapshot.pid, 7777);
       assert.deepEqual(externalProcess.resizeCalls, [{ cols: 140, rows: 42 }]);
       assert.deepEqual(externalProcess.writes, ["raw input"]);

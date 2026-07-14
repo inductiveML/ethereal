@@ -44,7 +44,7 @@ describe("branding logic", () => {
   it("returns Nightly for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppStageLabel({
-        primaryServerVersion: "0.0.28-nightly.20260616.12",
+        primaryServerVersion: "0.1.0-nightly.20260616.12",
         fallbackStageLabel: "Alpha",
       }),
     ).toBe("Nightly");
@@ -56,7 +56,7 @@ describe("branding logic", () => {
         baseName: "Ethereal",
         fallbackDisplayName: "Ethereal (Alpha)",
         fallbackStageLabel: "Alpha",
-        primaryServerVersion: "0.0.28-nightly.20260616.12",
+        primaryServerVersion: "0.1.0-nightly.20260616.12",
       }),
     ).toBe("Ethereal (Nightly)");
   });
@@ -78,7 +78,7 @@ describe("branding logic", () => {
         baseName: "Ethereal",
         fallbackDisplayName: "Ethereal (Alpha)",
         fallbackStageLabel: "Alpha",
-        primaryServerVersion: "0.0.28-nightly.20260616",
+        primaryServerVersion: "0.1.0-nightly.20260616",
       }),
     ).toBe("Ethereal (Alpha)");
   });
