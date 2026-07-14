@@ -2790,8 +2790,8 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
       raw: {
-        source: "claude.sdk.message",
-        method: "claude/result/success",
+        source: "claude.transcript.jsonl",
+        method: "assistant/usage",
         payload: {},
       },
     });

@@ -196,6 +196,8 @@ draining, and EOF shutdown fixed it. A subsequent live resume and fresh interrup
 - Provider-neutral runtime events, approvals, native user input, orchestration, projections, and
   WebSocket contracts.
 - The `claudeAgent` compatibility identity for existing settings and durable threads.
+- Decode-only `claude.sdk.*` raw-source schema literals for already-persisted Phase 1 events. No
+  current runtime or test emits them.
 - Generic Claude CLI status, model, auth-status, and update metadata.
 - Codex and all other provider adapters.
 - Git worktrees, checkpoints, diffs, revert support, SSH, browser preview, and MCP.
@@ -229,6 +231,8 @@ draining, and EOF shutdown fixed it. A subsequent live resume and fresh interrup
 - `85443a12` `refactor: make Claude PTY the sole Claude runtime` — SDK removal, compatibility
   cutover, native AskUserQuestion, and PTY reliability fixes.
 - `docs: finalize Claude PTY validation report` — this final evidence report.
+- `chore: mark legacy Claude events decode-only` — PTY-aligned runtime fixture plus the narrow
+  persisted-event compatibility seam.
 
 ## Result
 

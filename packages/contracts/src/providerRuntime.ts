@@ -22,6 +22,8 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("codex.app-server.notification"),
   Schema.Literal("codex.app-server.request"),
   Schema.Literal("codex.eventmsg"),
+  // Decode-only compatibility for durable events written before the PTY
+  // cutover. No current Claude runtime emits either source.
   Schema.Literal("claude.sdk.message"),
   Schema.Literal("claude.sdk.permission"),
   Schema.Literal("claude.pty"),
