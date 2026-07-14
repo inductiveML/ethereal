@@ -39,19 +39,13 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
     t3Home: "/tmp/t3",
     host: "127.0.0.1",
     desktopBootstrapToken: "token",
-    tailscaleServeEnabled: false,
-    tailscaleServePort: 443,
   },
-  bootstrapDelivery: "fd3",
-  extendEnv: true,
   httpBaseUrl: new URL("http://127.0.0.1:3773"),
   captureOutput: true,
-  preflightFailure: Option.none(),
 };
 
 const configWithObservability: DesktopBackendBootstrapValue = {
   ...baseConfig.bootstrap,
-  tailscaleServeEnabled: true,
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };
 
@@ -108,9 +102,6 @@ interface MakeInstanceInput {
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
   readonly onReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
-  readonly onPreflightFailed?: (
-    failure: DesktopBackendManager.PreflightFailure,
-  ) => Effect.Effect<boolean>;
   readonly config?: DesktopBackendManager.DesktopBackendStartConfig;
   readonly configResolve?: Effect.Effect<DesktopBackendManager.DesktopBackendStartConfig>;
 }
@@ -143,7 +134,6 @@ function makeTestInstance(input: MakeInstanceInput) {
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
-    ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
   });
 
   return instance.pipe(Effect.provide(servicesLayer));
@@ -417,201 +407,6 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         yield* TestClock.adjust(Duration.millis(1));
         assert.equal(yield* Queue.take(starts), 3);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("does not notify shutdown when a scheduled restart starts from non-ready state", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let shutdownCount = 0;
-
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("unexpected backend spawn")),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          config: {
-            ...baseConfig,
-            preflightFailure: Option.some({ reason: "preflight failed", fatal: false }),
-          },
-          onShutdown: Effect.sync(() => {
-            shutdownCount += 1;
-          }),
-        });
-
-        yield* instance.start;
-        assert.equal(shutdownCount, 0);
-
-        yield* TestClock.adjust(Duration.millis(500));
-        assert.equal(shutdownCount, 0);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("surfaces a fatal preflight failure once and stops looping after the cap", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const failures: string[] = [];
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("unexpected backend spawn")),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          config: {
-            ...baseConfig,
-            preflightFailure: Option.some({ reason: "Node.js not found", fatal: true }),
-          },
-          onPreflightFailed: (failure) =>
-            Effect.sync(() => {
-              failures.push(failure.reason);
-            }).pipe(Effect.as(false)),
-        });
-
-        yield* instance.start;
-        assert.deepEqual(failures, []);
-
-        // Five fatal attempts with exponential backoff (500ms, 1s, 2s, 4s) reach
-        // the cap, at which point the failure is surfaced exactly once.
-        yield* TestClock.adjust(Duration.millis(500));
-        yield* TestClock.adjust(Duration.seconds(1));
-        yield* TestClock.adjust(Duration.seconds(2));
-        yield* TestClock.adjust(Duration.seconds(4));
-        assert.deepEqual(failures, ["Node.js not found"]);
-
-        // Past the cap the loop stops and nothing else is surfaced.
-        yield* TestClock.adjust(Duration.seconds(8));
-        yield* TestClock.adjust(Duration.seconds(30));
-        assert.deepEqual(failures, ["Node.js not found"]);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("can be started again after a fatal preflight cap once config recovers", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const failing = yield* Ref.make(true);
-        const starts = yield* Queue.unbounded<number>();
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() =>
-            Queue.offer(starts, 123).pipe(
-              Effect.as(
-                makeProcess({
-                  exitCode: Effect.never,
-                }),
-              ),
-            ),
-          ),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          configResolve: Ref.get(failing).pipe(
-            Effect.map((isFailing) =>
-              isFailing
-                ? {
-                    ...baseConfig,
-                    preflightFailure: Option.some({
-                      reason: "Node.js not found",
-                      fatal: true,
-                    }),
-                  }
-                : baseConfig,
-            ),
-          ),
-        });
-
-        yield* instance.start;
-        yield* TestClock.adjust(Duration.millis(500));
-        yield* TestClock.adjust(Duration.seconds(1));
-        yield* TestClock.adjust(Duration.seconds(2));
-        yield* TestClock.adjust(Duration.seconds(4));
-        yield* TestClock.adjust(Duration.seconds(8));
-
-        const parked = yield* instance.snapshot;
-        assert.equal(parked.desiredRunning, false);
-        assert.equal(parked.ready, false);
-        assert.isTrue(Option.isNone(parked.activePid));
-        assert.equal(parked.restartScheduled, false);
-        assert.equal(yield* Queue.size(starts), 0);
-
-        yield* Ref.set(failing, false);
-        yield* instance.start;
-
-        assert.equal(yield* Queue.take(starts), 123);
-        const running = yield* instance.snapshot;
-        assert.equal(running.desiredRunning, true);
-        assert.deepEqual(running.activePid, Option.some(123));
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("keeps retrying a transient (non-fatal) preflight failure without surfacing", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const failures: string[] = [];
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("unexpected backend spawn")),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          config: {
-            ...baseConfig,
-            preflightFailure: Option.some({ reason: "wslpath conversion failed", fatal: false }),
-          },
-          onPreflightFailed: (failure) =>
-            Effect.sync(() => {
-              failures.push(failure.reason);
-            }).pipe(Effect.as(false)),
-        });
-
-        yield* instance.start;
-        // Well beyond the fatal cap's worth of time: a transient failure must
-        // keep retrying (self-heal) and never surface.
-        yield* TestClock.adjust(Duration.minutes(2));
-        assert.deepEqual(failures, []);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("surfaces a bounded transient preflight failure after its retry limit", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const failures: string[] = [];
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("unexpected backend spawn")),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          config: {
-            ...baseConfig,
-            preflightFailure: Option.some({
-              reason: "WSL toolchain probe timed out",
-              fatal: false,
-              retryLimit: 3,
-            }),
-          },
-          onPreflightFailed: (failure) =>
-            Effect.sync(() => {
-              failures.push(failure.reason);
-            }).pipe(Effect.as(false)),
-        });
-
-        yield* instance.start;
-        yield* TestClock.adjust(Duration.millis(500));
-        assert.deepEqual(failures, []);
-
-        yield* TestClock.adjust(Duration.seconds(1));
-        assert.deepEqual(failures, ["WSL toolchain probe timed out"]);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

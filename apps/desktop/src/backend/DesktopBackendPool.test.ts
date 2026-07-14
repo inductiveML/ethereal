@@ -9,8 +9,6 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
-import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
-import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
@@ -63,17 +61,13 @@ function makePoolLayer(
         Layer.succeed(DesktopBackendConfiguration.DesktopBackendConfiguration, {
           resolvePrimary: Effect.die("unexpected primary config resolve"),
           resolvePrimaryLabel: Ref.get(labelRef),
-          resolveWsl: () => Effect.die("unexpected WSL config resolve"),
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
-        DesktopAppSettings.layerTest(),
-        ElectronDialog.layer,
         Layer.succeed(DesktopWindow.DesktopWindow, {
           createMain: Effect.die("unexpected window create"),
           ensureMain: Effect.die("unexpected window ensure"),
           revealOrCreateMain: Effect.die("unexpected window reveal"),
           activate: Effect.die("unexpected window activate"),
           createMainIfBackendReady: Effect.die("unexpected window create"),
-          showConnectingSplash: Effect.void,
           handleBackendReady: () => Effect.void,
           handleBackendNotReady: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
@@ -89,13 +83,13 @@ describe("DesktopBackendPool", () => {
     Effect.gen(function* () {
       const pool = yield* DesktopBackendPool.DesktopBackendPool;
       const fetchedPrimary = yield* pool.get(DesktopBackendPool.PRIMARY_INSTANCE_ID);
-      const fetchedWsl = yield* pool.get(DesktopBackendPool.BackendInstanceId("wsl:ubuntu"));
+      const fetchedSecondary = yield* pool.get(DesktopBackendPool.BackendInstanceId("secondary"));
       const fetchedMissing = yield* pool.get(DesktopBackendPool.BackendInstanceId("missing"));
       const all = yield* pool.list;
       const resolvedPrimary = yield* pool.primary;
 
-      assert.equal(yield* Option.getOrThrow(fetchedPrimary).label, "Windows");
-      assert.equal(yield* Option.getOrThrow(fetchedWsl).label, "WSL (Ubuntu)");
+      assert.equal(yield* Option.getOrThrow(fetchedPrimary).label, "Local environment");
+      assert.equal(yield* Option.getOrThrow(fetchedSecondary).label, "Secondary");
       assert.isTrue(Option.isNone(fetchedMissing));
       assert.lengthOf(all, 2);
       // First instance becomes primary in layerTest so single-instance
@@ -104,8 +98,8 @@ describe("DesktopBackendPool", () => {
     }).pipe(
       Effect.provide(
         DesktopBackendPool.layerTest([
-          makeStubInstance(DesktopBackendPool.PRIMARY_INSTANCE_ID, "Windows"),
-          makeStubInstance(DesktopBackendPool.BackendInstanceId("wsl:ubuntu"), "WSL (Ubuntu)"),
+          makeStubInstance(DesktopBackendPool.PRIMARY_INSTANCE_ID, "Local environment"),
+          makeStubInstance(DesktopBackendPool.BackendInstanceId("secondary"), "Secondary"),
         ]),
       ),
     ),
@@ -113,24 +107,22 @@ describe("DesktopBackendPool", () => {
 
   it.effect("layerTest dies when no instances are supplied", () =>
     Effect.exit(
-      Effect.gen(function* () {
-        yield* DesktopBackendPool.DesktopBackendPool;
-      }).pipe(Effect.provide(DesktopBackendPool.layerTest([]))),
+      DesktopBackendPool.DesktopBackendPool.pipe(Effect.provide(DesktopBackendPool.layerTest([]))),
     ).pipe(Effect.map((exit) => assert.equal(exit._tag, "Failure"))),
   );
 
   it.effect("resolves the primary label lazily after pool layer construction", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const labelRef = yield* Ref.make("Windows");
+        const labelRef = yield* Ref.make("Local environment");
         const pool = yield* DesktopBackendPool.DesktopBackendPool.pipe(
           Effect.provide(makePoolLayer(labelRef)),
         );
         const primary = yield* pool.primary;
 
-        yield* Ref.set(labelRef, "WSL (Ubuntu)");
+        yield* Ref.set(labelRef, "Renamed local environment");
 
-        assert.equal(yield* primary.label, "WSL (Ubuntu)");
+        assert.equal(yield* primary.label, "Renamed local environment");
       }),
     ),
   );

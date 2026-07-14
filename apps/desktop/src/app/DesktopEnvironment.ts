@@ -11,9 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
-import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -43,7 +41,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly appDataDirectory: string;
     readonly baseDir: string;
     readonly stateDir: string;
-    readonly desktopSettingsPath: string;
     readonly clientSettingsPath: string;
     readonly savedEnvironmentRegistryPath: string;
     readonly serverSettingsPath: string;
@@ -54,7 +51,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly backendEntryPath: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
-    readonly appUpdateYmlPath: string;
     readonly devServerUrl: Option.Option<URL>;
     readonly devRemoteT3ServerEntryPath: Option.Option<string>;
     readonly configuredBackendPort: Option.Option<number>;
@@ -68,7 +64,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly linuxWmClass: string;
     readonly userDataDirName: string;
     readonly legacyUserDataDirName: string;
-    readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
     readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
@@ -76,7 +71,7 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
+const APP_BASE_NAME = "Ethereal";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -86,7 +81,7 @@ function resolveDesktopAppStageLabel(input: {
     return "Dev";
   }
 
-  return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
+  return "Alpha";
 }
 
 function resolveDesktopAppBranding(input: {
@@ -97,7 +92,7 @@ function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: input.isDevelopment ? `${APP_BASE_NAME} (${stageLabel})` : APP_BASE_NAME,
   };
 }
 
@@ -174,7 +169,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appDataDirectory,
     baseDir,
     stateDir,
-    desktopSettingsPath: path.join(stateDir, "desktop-settings.json"),
     clientSettingsPath: path.join(stateDir, "client-settings.json"),
     savedEnvironmentRegistryPath: path.join(stateDir, "saved-environments.json"),
     serverSettingsPath: path.join(stateDir, "settings.json"),
@@ -185,9 +179,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     backendEntryPath: path.join(appRoot, "apps/server/dist/bin.mjs"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
-    appUpdateYmlPath: input.isPackaged
-      ? path.join(resourcesPath, "app-update.yml")
-      : path.join(input.appPath, "dev-app-update.yml"),
     devServerUrl,
     devRemoteT3ServerEntryPath: config.devRemoteT3ServerEntryPath,
     configuredBackendPort: config.configuredBackendPort,
@@ -203,7 +194,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
     userDataDirName,
     legacyUserDataDirName,
-    defaultDesktopSettings: DesktopAppSettings.resolveDefaultDesktopSettings(input.appVersion),
     runtimeInfo: resolveDesktopRuntimeInfo({
       platform: input.platform,
       processArch: input.processArch,

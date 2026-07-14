@@ -11,15 +11,15 @@ import { AuthSessionId, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * of every accepted credential.
  *
  * Typical usage:
- * - rendered in auth/pairing UI so the user understands what kind of
+ * - rendered in connection diagnostics so the user understands what kind of
  *   environment they are connecting to
  * - used by clients to decide whether silent desktop bootstrap is expected or
- *   whether an explicit pairing flow should be shown
+ *   whether an explicit one-time access bootstrap is required
  *
  * Meanings:
  * - `desktop-managed-local`: local desktop-managed environment with narrow
  *   trusted bootstrap, intended to avoid login prompts on the same machine
- * - `loopback-browser`: standalone local server intended for browser pairing on
+ * - `loopback-browser`: standalone local server intended for browser access on
  *   the same machine
  * - `remote-reachable`: environment intended to be reached from other devices
  *   or networks, where explicit pairing/auth is expected
@@ -38,38 +38,35 @@ export type ServerAuthPolicy = typeof ServerAuthPolicy.Type;
  * A credential type that can be exchanged for a real authenticated session.
  *
  * Bootstrap methods are for establishing trust at the start of a connection or
- * pairing flow. They are not the long-lived credential used for ordinary
- * authenticated HTTP / WebSocket traffic after pairing succeeds.
+ * bootstrap flow. They are not the long-lived credential used for ordinary
+ * authenticated HTTP / WebSocket traffic after bootstrap succeeds.
  *
  * Current methods:
  * - `desktop-bootstrap`: a trusted local desktop handoff, used so the desktop
- *   shell can pair the renderer without a login screen
- * - `one-time-token`: a short-lived pairing token, suitable for manual pairing
- *   flows such as `/pair?token=...`
+ *   shell can authenticate the renderer without a login screen
+ * - `one-time-token`: a short-lived bootstrap token, suitable for access URLs
+ *   such as `/#token=...`
  */
 export const ServerAuthBootstrapMethod = Schema.Literals(["desktop-bootstrap", "one-time-token"]);
 export type ServerAuthBootstrapMethod = typeof ServerAuthBootstrapMethod.Type;
 
 /**
  * A credential type accepted for steady-state authenticated requests after a
- * client has already paired.
+ * client has already bootstrapped.
  *
  * These methods are used by the server-wide auth layer for privileged HTTP and
  * WebSocket access. They are distinct from bootstrap methods so clients can
- * reason clearly about "pair first, then use session auth".
+ * reason clearly about "bootstrap first, then use session auth".
  *
  * Current methods:
  * - `browser-session-cookie`: cookie-backed browser session, used by the web
- *   app after bootstrap/pairing
+ *   app after bootstrap
  * - `bearer-access-token`: scoped token suitable for non-cookie or
  *   non-browser clients
- * - `dpop-access-token`: scoped proof-of-possession token used by managed
- *   relay connections
  */
 export const ServerAuthSessionMethod = Schema.Literals([
   "browser-session-cookie",
   "bearer-access-token",
-  "dpop-access-token",
 ]);
 export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 
@@ -79,8 +76,6 @@ export const AuthTerminalOperateScope = "terminal:operate" as const;
 export const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
-export const AuthRelayReadScope = "relay:read" as const;
-export const AuthRelayWriteScope = "relay:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -88,8 +83,6 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthReviewWriteScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);
@@ -100,13 +93,11 @@ export const AuthStandardClientScopes = [
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
   AuthReviewWriteScope,
-  AuthRelayReadScope,
 ] as const;
 export const AuthAdministrativeScopes = [
   ...AuthStandardClientScopes,
   AuthAccessReadScope,
   AuthAccessWriteScope,
-  AuthRelayWriteScope,
 ] as const;
 
 export const AuthTokenExchangeGrantType =
@@ -187,7 +178,7 @@ export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
 export const AuthAccessTokenResult = Schema.Struct({
   access_token: TrimmedNonEmptyString,
   issued_token_type: Schema.Literal(AuthAccessTokenType),
-  token_type: Schema.Literals(["Bearer", "DPoP"]),
+  token_type: Schema.Literal("Bearer"),
   expires_in: Schema.Number,
   scope: TrimmedNonEmptyString,
 });

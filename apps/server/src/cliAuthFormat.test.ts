@@ -8,7 +8,7 @@ import {
   formatSessionList,
 } from "./cliAuthFormat.ts";
 
-it("formats issued pairing credentials with the secret and optional pair URL", () => {
+it("formats issued pairing credentials with the secret and optional access URL", () => {
   const output = formatIssuedPairingCredential(
     {
       id: "pairing-1",
@@ -22,7 +22,7 @@ it("formats issued pairing credentials with the secret and optional pair URL", (
   );
 
   expect(output).toContain("secret-pairing-token");
-  expect(output).toContain("https://example.com/pair#token=secret-pairing-token");
+  expect(output).toContain("https://example.com/#token=secret-pairing-token");
 });
 
 it("formats pairing listings without exposing the secret token", () => {

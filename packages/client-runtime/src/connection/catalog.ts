@@ -5,7 +5,6 @@ import * as Schema from "effect/Schema";
 import {
   BearerConnectionTarget,
   PrimaryConnectionTarget,
-  RelayConnectionTarget,
   SshConnectionTarget,
   type ConnectionTarget,
 } from "./model.ts";
@@ -58,13 +57,6 @@ export class PrimaryConnectionRegistration extends Schema.TaggedClass<PrimaryCon
   },
 ) {}
 
-export class RelayConnectionRegistration extends Schema.TaggedClass<RelayConnectionRegistration>()(
-  "RelayConnectionRegistration",
-  {
-    target: RelayConnectionTarget,
-  },
-) {}
-
 export class BearerConnectionRegistration extends Schema.TaggedClass<BearerConnectionRegistration>()(
   "BearerConnectionRegistration",
   {
@@ -83,7 +75,6 @@ export class SshConnectionRegistration extends Schema.TaggedClass<SshConnectionR
 ) {}
 
 export const ConnectionRegistration = Schema.Union([
-  RelayConnectionRegistration,
   BearerConnectionRegistration,
   SshConnectionRegistration,
 ]);
@@ -91,12 +82,9 @@ export type ConnectionRegistration = typeof ConnectionRegistration.Type;
 
 /**
  * Platform-managed registrations are reconciled from the host (the desktop
- * bootstrap IPC) rather than persisted by the user. They cover the primary
- * local environment plus any additional desktop-local backends running
- * alongside it (e.g. a parallel WSL backend). The primary stays on same-origin
- * cookie auth (`PrimaryConnectionRegistration`); secondary local backends live
- * on a separate loopback origin and authenticate with a bearer token minted
- * from their bootstrap credential (`BearerConnectionRegistration`).
+ * bootstrap IPC) rather than persisted by the user. The primary uses
+ * same-origin cookie auth (`PrimaryConnectionRegistration`). The bearer variant
+ * remains available to hosts that provide an authenticated local endpoint.
  */
 export const PlatformConnectionRegistration = Schema.Union([
   PrimaryConnectionRegistration,
@@ -115,7 +103,6 @@ export function connectionRegistrationCatalogEntry(
 ): ConnectionCatalogEntry {
   switch (registration._tag) {
     case "PrimaryConnectionRegistration":
-    case "RelayConnectionRegistration":
       return {
         target: registration.target,
         profile: Option.none(),

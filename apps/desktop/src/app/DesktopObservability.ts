@@ -397,8 +397,8 @@ const backendOutputLogFactoryLayer = Layer.effect(
     const factoryScope = yield* Scope.Scope;
     // Per-file-path cache of the IO sink only. The per-call shape
     // wraps the sink with the caller's instance id so a cache hit on
-    // a path collision (e.g. "wsl:default" and "wsl_default" both
-    // resolve to server-child-wsl_default.log) doesn't attribute the
+    // a path collision (e.g. "ssh:example" and "ssh_example" both
+    // resolve to server-child-ssh_example.log) doesn't attribute the
     // second caller's writes to the first caller's id. Each sink pins
     // itself to the factory's scope so all log resources tear down
     // together at app exit. Mutex serializes concurrent first-time

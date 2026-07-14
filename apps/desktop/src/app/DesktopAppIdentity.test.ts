@@ -20,18 +20,14 @@ const defaultEnvironmentInput = {
   platform: "darwin",
   processArch: "arm64",
   appVersion: "1.2.3",
-  appPath: "/Applications/T3 Code.app/Contents/Resources/app.asar",
+  appPath: "/Applications/Ethereal.app/Contents/Resources/app.asar",
   isPackaged: true,
-  resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
+  resourcesPath: "/Applications/Ethereal.app/Contents/Resources",
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
-type TestEnvironmentInput = Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> & {
-  readonly env?: Record<string, string | undefined>;
-};
-
 interface ElectronAppCalls {
-  readonly setAboutPanelOptions: Array<Electron.AboutPanelOptionsOptions>;
+  readonly setAboutPanelOptions: Electron.AboutPanelOptionsOptions[];
   readonly setDockIcon: string[];
   readonly setName: string[];
 }
@@ -39,84 +35,47 @@ interface ElectronAppCalls {
 const makeElectronAppLayer = (calls: ElectronAppCalls) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
-    name: Effect.succeed("T3 Code"),
+    name: Effect.succeed("Ethereal"),
     whenReady: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
     relaunch: () => Effect.void,
     setPath: () => Effect.void,
-    setName: (name) =>
-      Effect.sync(() => {
-        calls.setName.push(name);
-      }),
-    setAboutPanelOptions: (options) =>
-      Effect.sync(() => {
-        calls.setAboutPanelOptions.push(options);
-      }),
+    setName: (name) => Effect.sync(() => calls.setName.push(name)),
+    setAboutPanelOptions: (options) => Effect.sync(() => calls.setAboutPanelOptions.push(options)),
     setAppUserModelId: () => Effect.void,
     requestSingleInstanceLock: Effect.succeed(true),
     isDefaultProtocolClient: () => Effect.succeed(false),
     setAsDefaultProtocolClient: () => Effect.succeed(true),
     setDesktopName: () => Effect.void,
-    setDockIcon: (iconPath) =>
-      Effect.sync(() => {
-        calls.setDockIcon.push(iconPath);
-      }),
+    setDockIcon: (iconPath) => Effect.sync(() => calls.setDockIcon.push(iconPath)),
     appendCommandLineSwitch: () => Effect.void,
     on: () => Effect.void,
   } satisfies ElectronApp.ElectronApp["Service"]);
 
 const makeAssetsLayer = (png: Option.Option<string>) =>
   Layer.succeed(DesktopAssets.DesktopAssets, {
-    iconPaths: Effect.succeed({
-      ico: Option.none(),
-      icns: Option.none(),
-      png,
-    }),
+    iconPaths: Effect.succeed({ ico: Option.none(), icns: Option.none(), png }),
     resolveResourcePath: () => Effect.succeed(Option.none()),
   } satisfies DesktopAssets.DesktopAssets["Service"]);
 
-const makeEnvironmentLayer = (overrides: TestEnvironmentInput = {}) => {
-  const { env, ...environmentOverrides } = overrides;
-  return DesktopEnvironment.layer({
-    ...defaultEnvironmentInput,
-    ...environmentOverrides,
-  }).pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        NodeServices.layer,
-        DesktopConfig.layerTest({
-          ...env,
-        }),
-      ),
-    ),
+const makeEnvironmentLayer = (env: Record<string, string | undefined> = {}) =>
+  DesktopEnvironment.layer(defaultEnvironmentInput).pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(env))),
   );
-};
 
 const withIdentity = <A, E, R>(
-  effect: Effect.Effect<
-    A,
-    E,
-    | R
-    | DesktopAppIdentity.DesktopAppIdentity
-    | DesktopEnvironment.DesktopEnvironment
-    | FileSystem.FileSystem
-  >,
+  effect: Effect.Effect<A, E, R | DesktopAppIdentity.DesktopAppIdentity>,
   input: {
     readonly calls?: ElectronAppCalls;
-    readonly environment?: TestEnvironmentInput;
+    readonly env?: Record<string, string | undefined>;
     readonly legacyPathExists?: boolean;
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
-    readonly pngIconPath?: Option.Option<string>;
+    readonly png?: Option.Option<string>;
   } = {},
 ) => {
-  const calls: ElectronAppCalls = input.calls ?? {
-    setAboutPanelOptions: [],
-    setDockIcon: [],
-    setName: [],
-  };
-
+  const calls = input.calls ?? { setAboutPanelOptions: [], setDockIcon: [], setName: [] };
   return effect.pipe(
     Effect.provide(
       DesktopAppIdentity.layer.pipe(
@@ -129,12 +88,12 @@ const withIdentity = <A, E, R>(
                     input.legacyPathExists === true && path.includes("T3 Code (Alpha)"),
                   ),
             readFileString: () =>
-              Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
+              Effect.succeed(input.packageJson ?? '{"etherealCommitHash":"abcdef1234567890"}'),
           }),
         ),
-        Layer.provideMerge(makeAssetsLayer(input.pngIconPath ?? Option.none())),
+        Layer.provideMerge(makeAssetsLayer(input.png ?? Option.none())),
         Layer.provideMerge(makeElectronAppLayer(calls)),
-        Layer.provideMerge(makeEnvironmentLayer(input.environment)),
+        Layer.provideMerge(makeEnvironmentLayer(input.env)),
       ),
     ),
   );
@@ -145,11 +104,24 @@ describe("DesktopAppIdentity", () => {
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const userDataPath = yield* identity.resolveUserDataPath;
-
-        assert.equal(userDataPath, "/Users/alice/Library/Application Support/T3 Code (Alpha)");
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/T3 Code (Alpha)",
+        );
       }),
       { legacyPathExists: true },
+    ),
+  );
+
+  it.effect("uses the stable t3code userData path for a new installation", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/t3code",
+        );
+      }),
     ),
   );
 
@@ -171,41 +143,31 @@ describe("DesktopAppIdentity", () => {
         assert.instanceOf(error, DesktopAppIdentity.DesktopUserDataPathResolutionError);
         assert.equal(error.legacyPath, legacyPath);
         assert.strictEqual(error.cause, cause);
-        assert.equal(
-          error.message,
-          `Failed to inspect legacy desktop user-data path at "${legacyPath}".`,
-        );
       }),
       { legacyPathProbeError: cause },
     );
   });
 
-  it.effect("configures app identity from the environment commit override", () => {
+  it.effect("configures the Ethereal name, version, commit, and icon", () => {
     const calls: ElectronAppCalls = {
       setAboutPanelOptions: [],
       setDockIcon: [],
       setName: [],
     };
-
     return withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
-
-        assert.deepEqual(calls.setName, ["T3 Code (Alpha)"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "T3 Code (Alpha)");
+        assert.deepEqual(calls.setName, ["Ethereal"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "Ethereal");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
         assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
       }),
       {
         calls,
-        environment: {
-          env: {
-            T3CODE_COMMIT_HASH: "0123456789abcdef",
-          },
-        },
-        pngIconPath: Option.some("/icon.png"),
+        env: { T3CODE_COMMIT_HASH: "0123456789abcdef" },
+        png: Option.some("/icon.png"),
       },
     );
   });

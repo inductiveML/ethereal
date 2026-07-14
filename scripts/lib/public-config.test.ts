@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { loadRepoEnv, resolvePublicConfig } from "./public-config.ts";
+import { loadRepoEnv } from "./public-config.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -15,140 +15,58 @@ afterEach(() => {
 });
 
 describe("loadRepoEnv", () => {
-  it("does not project cloud configuration for an unconfigured clone", () => {
-    const env = loadRepoEnv({ baseEnv: {}, repoRoot: makeTemporaryDirectory() });
+  it("returns only the supplied base environment for an unconfigured clone", () => {
+    const env = loadRepoEnv({
+      baseEnv: { PATH: "/usr/local/bin", PROVIDER_API_KEY: "provider-key" },
+      repoRoot: makeTemporaryDirectory(),
+    });
 
-    expect(env.T3CODE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-    expect(env.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID).toBeUndefined();
-    expect(env.VITE_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-    expect(env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY).toBeUndefined();
-    expect(env.T3CODE_CLERK_JWT_TEMPLATE).toBeUndefined();
-    expect(env.VITE_CLERK_JWT_TEMPLATE).toBeUndefined();
-    expect(env.EXPO_PUBLIC_CLERK_JWT_TEMPLATE).toBeUndefined();
-    expect(env.T3CODE_RELAY_URL).toBeUndefined();
-    expect(env.VITE_T3CODE_RELAY_URL).toBeUndefined();
-    expect(env.T3CODE_MOBILE_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.T3CODE_MOBILE_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.T3CODE_MOBILE_OTLP_TRACES_TOKEN).toBeUndefined();
-    expect(env.EXPO_PUBLIC_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.EXPO_PUBLIC_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.EXPO_PUBLIC_OTLP_TRACES_TOKEN).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_URL).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_DATASET).toBeUndefined();
-    expect(env.VITE_RELAY_OTLP_TRACES_TOKEN).toBeUndefined();
+    expect(env).toEqual({
+      PATH: "/usr/local/bin",
+      PROVIDER_API_KEY: "provider-key",
+    });
   });
 
-  it("applies process, root local, and root precedence in that order", () => {
+  it("merges root, local, and base environments in ascending precedence", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_root\nT3CODE_CLERK_JWT_TEMPLATE=template_root\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nT3CODE_RELAY_URL=https://root.example.test\n",
+      "SHARED_VALUE=root\nROOT_AND_LOCAL=root\nROOT_ONLY=root-only\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
-      "T3CODE_CLERK_PUBLISHABLE_KEY=pk_local\nT3CODE_CLERK_JWT_TEMPLATE=template_local\nT3CODE_CLERK_CLI_OAUTH_CLIENT_ID=oauth_local\nT3CODE_RELAY_URL=https://local.example.test\n",
+      "SHARED_VALUE=local\nROOT_AND_LOCAL=local\nLOCAL_ONLY=local-only\n",
     );
 
-    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).T3CODE_RELAY_URL).toBe(
-      "https://local.example.test",
-    );
     expect(
       loadRepoEnv({
         baseEnv: {
-          T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-          T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
-          T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-          T3CODE_RELAY_URL: "https://ci.example.test",
+          SHARED_VALUE: "process",
+          PROCESS_ONLY: "process-only",
         },
         repoRoot,
       }),
-    ).toMatchObject({
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_ci",
-      VITE_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_ci",
-      T3CODE_CLERK_JWT_TEMPLATE: "template_ci",
-      VITE_CLERK_JWT_TEMPLATE: "template_ci",
-      EXPO_PUBLIC_CLERK_JWT_TEMPLATE: "template_ci",
-      T3CODE_RELAY_URL: "https://ci.example.test",
-      VITE_T3CODE_RELAY_URL: "https://ci.example.test",
+    ).toEqual({
+      SHARED_VALUE: "process",
+      ROOT_AND_LOCAL: "local",
+      ROOT_ONLY: "root-only",
+      LOCAL_ONLY: "local-only",
+      PROCESS_ONLY: "process-only",
     });
   });
 
-  it("accepts legacy framework aliases as root overrides", () => {
-    expect(
-      resolvePublicConfig({
-        VITE_CLERK_PUBLISHABLE_KEY: "pk_legacy",
-        VITE_CLERK_JWT_TEMPLATE: "template_legacy",
-        T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: "oauth_canonical",
-        VITE_T3CODE_RELAY_URL: "https://legacy.example.test",
-        EXPO_PUBLIC_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-        EXPO_PUBLIC_OTLP_TRACES_DATASET: "mobile-traces",
-        EXPO_PUBLIC_OTLP_TRACES_TOKEN: "mobile-token",
-      }),
-    ).toEqual({
-      clerkPublishableKey: "pk_legacy",
-      clerkJwtTemplate: "template_legacy",
-      clerkCliOAuthClientId: "oauth_canonical",
-      relayUrl: "https://legacy.example.test",
-      mobileOtlpTracesUrl: "https://api.axiom.co/v1/traces",
-      mobileOtlpTracesDataset: "mobile-traces",
-      mobileOtlpTracesToken: "mobile-token",
-      relayClientOtlpTracesUrl: undefined,
-      relayClientOtlpTracesDataset: undefined,
-      relayClientOtlpTracesToken: undefined,
-    });
-  });
+  it("does not translate environment variable names", () => {
+    const repoRoot = makeTemporaryDirectory();
+    NodeFS.writeFileSync(NodePath.join(repoRoot, ".env"), "CANONICAL_VALUE=canonical\n");
 
-  it("projects canonical relay client tracing values to web build aliases", () => {
-    expect(
-      loadRepoEnv({
-        baseEnv: {
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-client-traces",
-          T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-client-token",
-        },
-        repoRoot: makeTemporaryDirectory(),
-      }),
-    ).toEqual({
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_DATASET: "relay-client-traces",
-      T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN: "relay-client-token",
-      VITE_RELAY_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      VITE_RELAY_OTLP_TRACES_DATASET: "relay-client-traces",
-      VITE_RELAY_OTLP_TRACES_TOKEN: "relay-client-token",
-    });
-  });
-
-  it("projects canonical mobile tracing values to Expo public aliases", () => {
-    expect(
-      loadRepoEnv({
-        baseEnv: {
-          T3CODE_RELAY_URL: "https://relay.example.test",
-          T3CODE_MOBILE_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-          T3CODE_MOBILE_OTLP_TRACES_DATASET: "mobile-traces",
-          T3CODE_MOBILE_OTLP_TRACES_TOKEN: "mobile-token",
-        },
-        repoRoot: makeTemporaryDirectory(),
-      }),
-    ).toEqual({
-      T3CODE_RELAY_URL: "https://relay.example.test",
-      VITE_T3CODE_RELAY_URL: "https://relay.example.test",
-      T3CODE_MOBILE_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      T3CODE_MOBILE_OTLP_TRACES_DATASET: "mobile-traces",
-      T3CODE_MOBILE_OTLP_TRACES_TOKEN: "mobile-token",
-      EXPO_PUBLIC_OTLP_TRACES_URL: "https://api.axiom.co/v1/traces",
-      EXPO_PUBLIC_OTLP_TRACES_DATASET: "mobile-traces",
-      EXPO_PUBLIC_OTLP_TRACES_TOKEN: "mobile-token",
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot })).toEqual({
+      CANONICAL_VALUE: "canonical",
     });
   });
 });
 
 function makeTemporaryDirectory() {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-public-config-"));
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "ethereal-env-"));
   temporaryDirectories.push(directory);
   return directory;
 }

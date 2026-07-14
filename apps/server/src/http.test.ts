@@ -18,10 +18,10 @@ describe("http dev routing", () => {
 
   it("preserves path and query when redirecting to the dev server", () => {
     const devUrl = new URL("http://127.0.0.1:5173/");
-    const requestUrl = new URL("http://127.0.0.1:3774/pair?token=test-token");
+    const requestUrl = new URL("http://127.0.0.1:3774/projects?filter=active");
 
     expect(resolveDevRedirectUrl(devUrl, requestUrl)).toBe(
-      "http://127.0.0.1:5173/pair?token=test-token",
+      "http://127.0.0.1:5173/projects?filter=active",
     );
   });
 });

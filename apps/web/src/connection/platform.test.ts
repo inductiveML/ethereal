@@ -9,14 +9,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
-  canRetainCachedPlatformRegistrationAfterRefreshFailure,
   canReuseCachedPlatformRegistration,
   primaryRegistrationToRetainAfterTopologyRead,
   provisionDesktopSshEnvironment,
   readPrimaryEnvironmentTargetResult,
-  secondaryRegistrationsToRetainAfterTopologyRead,
-  secondaryBearerExpiresAtEpochMs,
-  secondaryBearerRefreshAtEpochMs,
 } from "./platform.ts";
 
 const TARGET: DesktopSshEnvironmentTarget = {
@@ -97,96 +93,6 @@ describe("desktop SSH pairing", () => {
   );
 });
 
-describe("desktop-local bearer cache", () => {
-  const registration = {} as never;
-
-  it("refreshes a secondary bearer before it expires", () => {
-    const issuedAtEpochMs = 10_000;
-    const refreshAtEpochMs = secondaryBearerRefreshAtEpochMs(issuedAtEpochMs, 60);
-    const expiresAtEpochMs = secondaryBearerExpiresAtEpochMs(issuedAtEpochMs, 60);
-    const cached = {
-      expiresAtEpochMs,
-      signature: "secondary-signature",
-      registration,
-      refreshAtEpochMs,
-    };
-
-    expect(refreshAtEpochMs).toBe(65_000);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 64_999)).toBe(true);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 65_000)).toBe(false);
-    expect(
-      canRetainCachedPlatformRegistrationAfterRefreshFailure(cached, cached.signature, 69_999),
-    ).toBe(true);
-    expect(
-      canRetainCachedPlatformRegistrationAfterRefreshFailure(cached, cached.signature, 70_000),
-    ).toBe(false);
-  });
-
-  it("does not cache credentials whose lifetime is shorter than the refresh skew", () => {
-    const refreshAtEpochMs = secondaryBearerRefreshAtEpochMs(10_000, 3);
-    const cached = {
-      expiresAtEpochMs: secondaryBearerExpiresAtEpochMs(10_000, 3),
-      signature: "secondary-signature",
-      registration,
-      refreshAtEpochMs,
-    };
-
-    expect(refreshAtEpochMs).toBe(10_000);
-    expect(canReuseCachedPlatformRegistration(cached, cached.signature, 10_000)).toBe(false);
-  });
-
-  it("retains only unexpired secondaries after a topology read failure", () => {
-    const valid = {
-      expiresAtEpochMs: 20_000,
-      signature: "valid-secondary",
-      registration,
-      refreshAtEpochMs: 15_000,
-    };
-    const previous = new Map([
-      ["valid-secondary", valid],
-      [
-        "expired-secondary",
-        {
-          expiresAtEpochMs: 10_000,
-          signature: "expired-secondary",
-          registration,
-          refreshAtEpochMs: 5_000,
-        },
-      ],
-    ]);
-
-    expect(
-      secondaryRegistrationsToRetainAfterTopologyRead(
-        previous,
-        { _tag: "Failure", cause: new Error("IPC unavailable") },
-        10_000,
-      ),
-    ).toEqual(new Map([["valid-secondary", valid]]));
-  });
-
-  it("treats a successful empty topology as authoritative removal", () => {
-    const previous = new Map([
-      [
-        "secondary",
-        {
-          expiresAtEpochMs: 20_000,
-          signature: "secondary",
-          registration,
-          refreshAtEpochMs: 15_000,
-        },
-      ],
-    ]);
-
-    expect(
-      secondaryRegistrationsToRetainAfterTopologyRead(
-        previous,
-        { _tag: "Success", bootstraps: [] },
-        10_000,
-      ),
-    ).toEqual(new Map());
-  });
-});
-
 describe("primary topology cache", () => {
   const registration = {} as never;
   const cached = {
@@ -194,6 +100,11 @@ describe("primary topology cache", () => {
     registration,
   };
   const previous = new Map([[PRIMARY_LOCAL_ENVIRONMENT_ID, cached]]);
+
+  it("reuses a cached primary only while its endpoint signature matches", () => {
+    expect(canReuseCachedPlatformRegistration(cached, cached.signature)).toBe(true);
+    expect(canReuseCachedPlatformRegistration(cached, "changed")).toBe(false);
+  });
 
   it("captures synchronous primary target read failures", () => {
     const cause = new Error("invalid primary target");

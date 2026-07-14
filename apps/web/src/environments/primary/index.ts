@@ -14,25 +14,12 @@ export {
 } from "./context";
 
 export {
-  createServerPairingCredential,
   fetchSessionState,
-  isPrimaryEnvironmentPairingCredentialRejectedError,
+  isPrimaryEnvironmentBootstrapCredentialRejectedError,
   isPrimaryEnvironmentRequestError,
-  listServerClientSessions,
-  listServerPairingLinks,
-  peekPairingTokenFromUrl,
-  PrimaryEnvironmentPairingCredentialRejectedError,
+  PrimaryEnvironmentBootstrapCredentialRejectedError,
   PrimaryEnvironmentRequestError,
-  reauthenticatePrimaryEnvironment,
   resolveInitialServerAuthGateState,
-  revokeOtherServerClientSessions,
-  revokeServerClientSession,
-  revokeServerPairingLink,
-  stripPairingTokenFromUrl,
-  submitServerAuthCredential,
-  takePairingTokenFromUrl,
-  type ServerClientSessionRecord,
-  type ServerPairingLinkRecord,
   __resetServerAuthBootstrapForTests,
 } from "./auth";
 

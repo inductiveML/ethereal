@@ -83,12 +83,6 @@ export class EnvironmentRegistry extends Context.Service<
       | EnvironmentNotRegisteredError
       | PlatformEnvironmentRemovalError
     >;
-    readonly removeRelayEnvironments: () => Effect.Effect<
-      void,
-      | Persistence.ConnectionPersistenceError
-      | ConnectionAttemptError
-      | PlatformEnvironmentRemovalError
-    >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly state: (
       environmentId: EnvironmentId,
@@ -421,10 +415,8 @@ export const make = Effect.gen(function* () {
             return next;
           });
 
-          // Secondary desktop-local backends (e.g. a parallel WSL backend) live
-          // on their own loopback origin, so they authenticate with a bearer
-          // token instead of the primary's same-origin cookie. Stash it where
-          // the resolver's bearer broker looks it up.
+          // Host-provided bearer endpoints store their credential where the
+          // resolver's bearer broker looks it up.
           if (registration._tag === "BearerConnectionRegistration") {
             yield* credentials.put(registration.target.connectionId, registration.credential).pipe(
               Effect.catch((error) =>
@@ -466,10 +458,9 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  // Tear down a platform-managed environment that the host no longer reports
-  // (e.g. the user turned the parallel WSL backend off). Platform environments
-  // bypass the user-facing `remove` guard since they are reconciled from the
-  // bootstrap rather than removed by hand.
+  // Tear down a platform-managed environment that the host no longer reports.
+  // Platform environments bypass the user-facing `remove` guard since they are
+  // reconciled from the bootstrap rather than removed by hand.
   const removePlatformEnvironment = Effect.fn("EnvironmentRegistry.removePlatformEnvironment")(
     function* (environmentId: EnvironmentId) {
       yield* withLeaseLock(
@@ -523,8 +514,8 @@ export const make = Effect.gen(function* () {
   });
 
   // Reconcile the full set of platform-managed environments against what the
-  // host currently reports: add/refresh the desired ones and tear down any
-  // platform environment that disappeared (WSL toggled off, distro switched).
+  // host currently reports: add or refresh desired entries and tear down any
+  // platform environment that disappeared.
   const reconcilePlatform = Effect.fn("EnvironmentRegistry.reconcilePlatform")(function* (
     platformRegistrations: ReadonlyArray<PlatformConnectionRegistration>,
   ) {
@@ -602,26 +593,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const removeRelayEnvironments = Effect.fn("EnvironmentRegistry.removeRelayEnvironments")(
-    function* () {
-      const relayEnvironmentIds = [...(yield* SubscriptionRef.get(entries)).values()]
-        .filter((entry) => entry.target._tag === "RelayConnectionTarget")
-        .map((entry) => entry.target.environmentId);
-
-      yield* Effect.forEach(
-        relayEnvironmentIds,
-        (environmentId) =>
-          remove(environmentId).pipe(
-            Effect.catchTag("EnvironmentNotRegisteredError", () => Effect.void),
-          ),
-        {
-          concurrency: "unbounded",
-          discard: true,
-        },
-      );
-    },
-  );
-
   const retryNow = (environmentId: EnvironmentId) =>
     acquireSupervisor(environmentId).pipe(
       Effect.flatMap((supervisor) => supervisor.retryNow),
@@ -665,7 +636,6 @@ export const make = Effect.gen(function* () {
     registerPlatform,
     reconcilePlatform,
     remove,
-    removeRelayEnvironments,
     retryNow,
     state,
     stateChanges,

@@ -4,13 +4,13 @@ import { QrCode } from "@t3tools/shared/qrCode";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
-import { ServerConfig } from "./config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { ServerConfig } from "./config.ts";
 
 export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
   readonly token: string;
-  readonly pairingUrl: string;
+  readonly accessUrl: string;
 }
 
 type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
@@ -89,9 +89,9 @@ export const resolveListeningPort = (address: unknown, fallbackPort: number): nu
   return fallbackPort;
 };
 
-export const buildPairingUrl = (connectionString: string, token: string): string => {
+export const buildAccessUrl = (connectionString: string, token: string): string => {
   const url = new URL(connectionString);
-  url.pathname = "/pair";
+  url.pathname = "/";
   url.searchParams.delete("token");
   url.hash = new URLSearchParams([["token", token]]).toString();
   return url.toString();
@@ -121,12 +121,12 @@ export const renderTerminalQrCode = (value: string, margin = 2): string => {
 
 export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): string =>
   [
-    "T3 Code server is ready.",
+    "Ethereal server is ready.",
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
-    `Pairing URL: ${accessInfo.pairingUrl}`,
+    `Access URL: ${accessInfo.accessUrl}`,
     "",
-    renderTerminalQrCode(accessInfo.pairingUrl),
+    renderTerminalQrCode(accessInfo.accessUrl),
     "",
   ].join("\n");
 
@@ -143,6 +143,6 @@ export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessI
   return {
     connectionString,
     token: issued.credential,
-    pairingUrl: buildPairingUrl(connectionString, issued.credential),
+    accessUrl: buildAccessUrl(connectionString, issued.credential),
   } satisfies HeadlessServeAccessInfo;
 });
