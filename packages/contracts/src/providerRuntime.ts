@@ -24,6 +24,8 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("codex.eventmsg"),
   Schema.Literal("claude.sdk.message"),
   Schema.Literal("claude.sdk.permission"),
+  Schema.Literal("claude.pty.hook"),
+  Schema.Literal("claude.transcript.jsonl"),
   Schema.Literal("codex.sdk.thread-event"),
   Schema.Literal("opencode.sdk.event"),
   Schema.Literal("acp.jsonrpc"),
