@@ -18,6 +18,7 @@ application bundled into the desktop build.
 │  ServerPushBus (ordered pushes) │
 │  ServerReadiness (startup gate) │
 │  Task context + handoffs        │
+│  Parallel isolated task runs    │
 │  OrchestrationEngine            │
 │  ProviderService                │
 │  CheckpointReactor              │
@@ -44,6 +45,10 @@ application bundled into the desktop build.
 - **Task context**: A durable provider-neutral task owns the goal and canonical context shared by
   its provider-session threads. Handoffs create a target thread and start its first turn as one
   command. See [Task context and agent handoffs](./task-context-and-handoffs.md).
+
+- **Parallel runs**: A task can start several provider sessions as one durable event transaction.
+  The server prepares a distinct Git branch and worktree for each worker, then lets their provider
+  turns overlap. See [Parallel agent runs](./parallel-agent-runs.md).
 
 ## Event Lifecycle
 
