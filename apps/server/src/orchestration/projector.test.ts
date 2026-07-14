@@ -109,6 +109,7 @@ describe("orchestration projector", () => {
         goal: "",
         context: "",
         sessionThreadIds: ["thread-1"],
+        runs: [],
         createdAt: now,
         updatedAt: now,
         deletedAt: null,

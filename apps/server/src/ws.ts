@@ -560,6 +560,85 @@ const makeWsRpcLayer = (
             });
       };
 
+      const recordSetupScriptLaunchFailure = (input: {
+        readonly threadId: ThreadId;
+        readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
+        readonly requestedAt: string;
+        readonly worktreePath: string;
+      }) => {
+        const detail = projectSetupScriptCompatibilityDetail(input.error);
+        return appendSetupScriptActivity({
+          threadId: input.threadId,
+          kind: "setup-script.failed",
+          summary: "Setup script failed to start",
+          createdAt: input.requestedAt,
+          payload: {
+            detail,
+            worktreePath: input.worktreePath,
+          },
+          tone: "error",
+        }).pipe(
+          Effect.ignoreCause({ log: false }),
+          Effect.flatMap(() =>
+            Effect.logWarning("bootstrap turn start failed to launch setup script", {
+              threadId: input.threadId,
+              worktreePath: input.worktreePath,
+              detail,
+            }),
+          ),
+        );
+      };
+
+      const recordSetupScriptStarted = (input: {
+        readonly threadId: ThreadId;
+        readonly requestedAt: string;
+        readonly worktreePath: string;
+        readonly scriptId: string;
+        readonly scriptName: string;
+        readonly terminalId: string;
+      }) =>
+        Effect.gen(function* () {
+          const startedAt = yield* nowIso;
+          const payload = {
+            scriptId: input.scriptId,
+            scriptName: input.scriptName,
+            terminalId: input.terminalId,
+            worktreePath: input.worktreePath,
+          };
+          yield* Effect.all([
+            appendSetupScriptActivity({
+              threadId: input.threadId,
+              kind: "setup-script.requested",
+              summary: "Starting setup script",
+              createdAt: input.requestedAt,
+              payload,
+              tone: "info",
+            }),
+            appendSetupScriptActivity({
+              threadId: input.threadId,
+              kind: "setup-script.started",
+              summary: "Setup script started",
+              createdAt: startedAt,
+              payload,
+              tone: "info",
+            }),
+          ]).pipe(
+            Effect.asVoid,
+            Effect.catch((error) =>
+              Effect.logWarning(
+                "bootstrap turn start launched setup script but failed to record setup activity",
+                {
+                  threadId: input.threadId,
+                  worktreePath: input.worktreePath,
+                  scriptId: input.scriptId,
+                  terminalId: input.terminalId,
+                  detail: error.message,
+                },
+              ),
+            ),
+          );
+        });
+
       const enrichProjectEvent = (
         event: OrchestrationEvent,
       ): Effect.Effect<OrchestrationEvent, never, never> => {
@@ -633,6 +712,7 @@ const makeWsRpcLayer = (
             );
           case "task.created":
           case "task.context-updated":
+          case "task.run-started":
             return projectionSnapshotQuery.getTaskShellById(event.payload.taskId).pipe(
               Effect.map((task) =>
                 Option.map(task, (nextTask) => ({
@@ -715,83 +795,6 @@ const makeWsRpcLayer = (
                 )
               : Effect.void;
 
-          const recordSetupScriptLaunchFailure = (input: {
-            readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
-            readonly requestedAt: string;
-            readonly worktreePath: string;
-          }) => {
-            const detail = projectSetupScriptCompatibilityDetail(input.error);
-            return appendSetupScriptActivity({
-              threadId: command.threadId,
-              kind: "setup-script.failed",
-              summary: "Setup script failed to start",
-              createdAt: input.requestedAt,
-              payload: {
-                detail,
-                worktreePath: input.worktreePath,
-              },
-              tone: "error",
-            }).pipe(
-              Effect.ignoreCause({ log: false }),
-              Effect.flatMap(() =>
-                Effect.logWarning("bootstrap turn start failed to launch setup script", {
-                  threadId: command.threadId,
-                  worktreePath: input.worktreePath,
-                  detail,
-                }),
-              ),
-            );
-          };
-
-          const recordSetupScriptStarted = (input: {
-            readonly requestedAt: string;
-            readonly worktreePath: string;
-            readonly scriptId: string;
-            readonly scriptName: string;
-            readonly terminalId: string;
-          }) =>
-            Effect.gen(function* () {
-              const startedAt = yield* nowIso;
-              const payload = {
-                scriptId: input.scriptId,
-                scriptName: input.scriptName,
-                terminalId: input.terminalId,
-                worktreePath: input.worktreePath,
-              };
-              yield* Effect.all([
-                appendSetupScriptActivity({
-                  threadId: command.threadId,
-                  kind: "setup-script.requested",
-                  summary: "Starting setup script",
-                  createdAt: input.requestedAt,
-                  payload,
-                  tone: "info",
-                }),
-                appendSetupScriptActivity({
-                  threadId: command.threadId,
-                  kind: "setup-script.started",
-                  summary: "Setup script started",
-                  createdAt: startedAt,
-                  payload,
-                  tone: "info",
-                }),
-              ]).pipe(
-                Effect.asVoid,
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    "bootstrap turn start launched setup script but failed to record setup activity",
-                    {
-                      threadId: command.threadId,
-                      worktreePath: input.worktreePath,
-                      scriptId: input.scriptId,
-                      terminalId: input.terminalId,
-                      detail: error.message,
-                    },
-                  ),
-                ),
-              );
-            });
-
           const runSetupProgram = () =>
             Effect.gen(function* () {
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
@@ -810,6 +813,7 @@ const makeWsRpcLayer = (
                   Effect.matchEffect({
                     onFailure: (error) =>
                       recordSetupScriptLaunchFailure({
+                        threadId: command.threadId,
                         error,
                         requestedAt,
                         worktreePath,
@@ -819,6 +823,7 @@ const makeWsRpcLayer = (
                         return Effect.void;
                       }
                       return recordSetupScriptStarted({
+                        threadId: command.threadId,
                         requestedAt,
                         worktreePath,
                         scriptId: setupResult.scriptId,
@@ -899,19 +904,231 @@ const makeWsRpcLayer = (
           );
         });
 
+      const dispatchTaskRunStart = (
+        command: Extract<OrchestrationCommand, { type: "task.run.start" }>,
+      ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+        Effect.gen(function* () {
+          const task = yield* projectionSnapshotQuery.getTaskShellById(command.taskId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to load task before starting parallel run"),
+            ),
+          );
+          if (!task) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Task '${command.taskId}' does not exist.`,
+            });
+          }
+          const project = yield* projectionSnapshotQuery.getProjectShellById(task.projectId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError((cause) =>
+              toDispatchCommandError(cause, "Failed to load project before starting parallel run"),
+            ),
+          );
+          if (!project || project.workspaceRoot !== command.projectCwd) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "Parallel run workspace does not match the task project.",
+            });
+          }
+          if (!task.sessionThreadIds.includes(command.sourceThreadId)) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: "Parallel run source thread is not a session of the task.",
+            });
+          }
+
+          const existingRun = task.runs.find((run) => run.id === command.runId);
+          if (existingRun) {
+            const existingWorkers = new Map(
+              existingRun.workers.map((worker) => [worker.threadId, worker] as const),
+            );
+            return yield* orchestrationEngine
+              .dispatch({
+                ...command,
+                workers: command.workers.map((worker) => ({
+                  ...worker,
+                  worktreePath:
+                    existingWorkers.get(worker.threadId)?.worktreePath ?? worker.worktreePath,
+                })),
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to resume parallel run dispatch"),
+                ),
+              );
+          }
+
+          const createdWorktrees: string[] = [];
+          const launchedSetupThreadIds: ThreadId[] = [];
+          const cleanup = Effect.gen(function* () {
+            yield* Effect.forEach(
+              launchedSetupThreadIds,
+              (threadId) =>
+                terminalManager.close({ threadId }).pipe(Effect.ignoreCause({ log: true })),
+              { concurrency: "unbounded" },
+            );
+            yield* Effect.forEach(
+              createdWorktrees.toReversed(),
+              (worktreePath) =>
+                gitWorkflow
+                  .removeWorktree({
+                    cwd: command.projectCwd,
+                    path: worktreePath,
+                    force: true,
+                  })
+                  .pipe(Effect.ignoreCause({ log: true })),
+              { concurrency: 1 },
+            );
+          });
+
+          const program = Effect.gen(function* () {
+            let worktreeBaseRef = command.baseBranch;
+            if (command.startFromOrigin) {
+              yield* gitWorkflow.fetchRemote({
+                cwd: command.projectCwd,
+                remoteName: "origin",
+              });
+              const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                cwd: command.projectCwd,
+                refName: command.baseBranch,
+                fallbackRemoteName: "origin",
+              });
+              worktreeBaseRef = resolvedRemoteBase.commitSha;
+            }
+
+            const preparedWorkers: (typeof command.workers)[number][] = [];
+            const setupLaunches: Array<
+              | {
+                  readonly kind: "failed";
+                  readonly threadId: ThreadId;
+                  readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
+                  readonly requestedAt: string;
+                  readonly worktreePath: string;
+                }
+              | {
+                  readonly kind: "started";
+                  readonly threadId: ThreadId;
+                  readonly requestedAt: string;
+                  readonly worktreePath: string;
+                  readonly scriptId: string;
+                  readonly scriptName: string;
+                  readonly terminalId: string;
+                }
+            > = [];
+
+            for (const worker of command.workers) {
+              const refs = yield* gitWorkflow.listRefs({
+                cwd: command.projectCwd,
+                query: worker.branch,
+                refKind: "local",
+                limit: 100,
+              });
+              const existingRef = refs.refs.find((ref) => ref.name === worker.branch);
+              const createdWorktree = !existingRef?.worktreePath;
+              const worktree = existingRef?.worktreePath
+                ? { worktree: { path: existingRef.worktreePath, refName: existingRef.name } }
+                : yield* gitWorkflow.createWorktree({
+                    cwd: command.projectCwd,
+                    refName: existingRef ? existingRef.name : worktreeBaseRef,
+                    ...(existingRef ? {} : { newRefName: worker.branch }),
+                    baseRefName: command.baseBranch,
+                    path: null,
+                  });
+              if (createdWorktree) createdWorktrees.push(worktree.worktree.path);
+              preparedWorkers.push({
+                ...worker,
+                branch: worktree.worktree.refName,
+                worktreePath: worktree.worktree.path,
+              });
+
+              if (command.runSetupScript && createdWorktree) {
+                const requestedAt = yield* nowIso;
+                const setupLaunch = yield* projectSetupScriptRunner
+                  .runForThread({
+                    threadId: worker.threadId,
+                    projectId: task.projectId,
+                    projectCwd: command.projectCwd,
+                    worktreePath: worktree.worktree.path,
+                  })
+                  .pipe(
+                    Effect.match({
+                      onFailure: (error) =>
+                        ({
+                          kind: "failed" as const,
+                          threadId: worker.threadId,
+                          error,
+                          requestedAt,
+                          worktreePath: worktree.worktree.path,
+                        }) as const,
+                      onSuccess: (result) =>
+                        result.status === "started"
+                          ? ({
+                              kind: "started" as const,
+                              threadId: worker.threadId,
+                              requestedAt,
+                              worktreePath: worktree.worktree.path,
+                              scriptId: result.scriptId,
+                              scriptName: result.scriptName,
+                              terminalId: result.terminalId,
+                            } as const)
+                          : null,
+                    }),
+                  );
+                if (setupLaunch) {
+                  setupLaunches.push(setupLaunch);
+                  if (setupLaunch.kind === "started") launchedSetupThreadIds.push(worker.threadId);
+                }
+              }
+            }
+
+            const result = yield* orchestrationEngine
+              .dispatch({ ...command, workers: preparedWorkers })
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to dispatch parallel run"),
+                ),
+              );
+
+            yield* Effect.forEach(
+              setupLaunches,
+              (launch) =>
+                launch.kind === "failed"
+                  ? recordSetupScriptLaunchFailure(launch)
+                  : recordSetupScriptStarted(launch),
+              { concurrency: "unbounded" },
+            ).pipe(Effect.ignoreCause({ log: true }));
+            yield* Effect.forEach(
+              preparedWorkers,
+              (worker) =>
+                worker.worktreePath ? refreshGitStatus(worker.worktreePath) : Effect.void,
+              { concurrency: "unbounded" },
+            );
+            return result;
+          });
+
+          return yield* program.pipe(
+            Effect.catchCause((cause) =>
+              cleanup.pipe(
+                Effect.flatMap(() => Effect.fail(toBootstrapDispatchCommandCauseError(cause))),
+              ),
+            ),
+          );
+        });
+
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
           normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                  ),
-                );
+            : normalizedCommand.type === "task.run.start"
+              ? dispatchTaskRunStart(normalizedCommand)
+              : orchestrationEngine
+                  .dispatch(normalizedCommand)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    ),
+                  );
 
         return startup
           .enqueueCommand(dispatchEffect)

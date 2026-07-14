@@ -165,6 +165,7 @@ describe("applyShellStreamEvent", () => {
         goal: "Ship the fix",
         context: "Tests are green",
         sessionThreadIds: [ThreadId.make("thread-1")],
+        runs: [],
         createdAt: "2026-04-01T00:00:00.000Z",
         updatedAt: "2026-04-01T00:00:01.000Z",
       };

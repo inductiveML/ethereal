@@ -17,6 +17,7 @@ import {
   ProjectId,
   ProviderItemId,
   TaskId,
+  TaskRunId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -215,6 +216,25 @@ export const OrchestrationProject = Schema.Struct({
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
 
+export const OrchestrationTaskRunWorker = Schema.Struct({
+  threadId: ThreadId,
+  label: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  branch: TrimmedNonEmptyString,
+  worktreePath: TrimmedNonEmptyString,
+});
+export type OrchestrationTaskRunWorker = typeof OrchestrationTaskRunWorker.Type;
+
+export const OrchestrationTaskRun = Schema.Struct({
+  id: TaskRunId,
+  title: TrimmedNonEmptyString,
+  sourceThreadId: ThreadId,
+  instructions: Schema.String,
+  workers: Schema.Array(OrchestrationTaskRunWorker),
+  createdAt: IsoDateTime,
+});
+export type OrchestrationTaskRun = typeof OrchestrationTaskRun.Type;
+
 /**
  * Durable, provider-neutral context shared by the coding-agent sessions that
  * collaborate on one user task.
@@ -226,6 +246,7 @@ export const OrchestrationTask = Schema.Struct({
   goal: Schema.String,
   context: Schema.String,
   sessionThreadIds: Schema.Array(ThreadId),
+  runs: Schema.Array(OrchestrationTaskRun).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -407,6 +428,7 @@ export const OrchestrationTaskShell = Schema.Struct({
   goal: Schema.String,
   context: Schema.String,
   sessionThreadIds: Schema.Array(ThreadId),
+  runs: Schema.Array(OrchestrationTaskRun).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -593,6 +615,35 @@ const TaskHandoffStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const TaskRunStartWorker = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  label: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  branch: TrimmedNonEmptyString,
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  instructions: Schema.String,
+});
+
+const TaskRunStartCommand = Schema.Struct({
+  type: Schema.Literal("task.run.start"),
+  commandId: CommandId,
+  taskId: TaskId,
+  runId: TaskRunId,
+  sourceThreadId: ThreadId,
+  title: TrimmedNonEmptyString,
+  instructions: Schema.String,
+  projectCwd: TrimmedNonEmptyString,
+  baseBranch: TrimmedNonEmptyString,
+  startFromOrigin: Schema.optional(Schema.Boolean),
+  runSetupScript: Schema.optional(Schema.Boolean),
+  workers: Schema.Array(TaskRunStartWorker).check(Schema.isMinLength(2), Schema.isMaxLength(6)),
+  createdAt: IsoDateTime,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
@@ -771,6 +822,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   TaskContextUpdateCommand,
   TaskDeleteCommand,
   TaskHandoffStartCommand,
+  TaskRunStartCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -796,6 +848,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   TaskContextUpdateCommand,
   TaskDeleteCommand,
   TaskHandoffStartCommand,
+  TaskRunStartCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -900,6 +953,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "task.created",
   "task.context-updated",
+  "task.run-started",
   "task.deleted",
   "thread.created",
   "thread.deleted",
@@ -974,6 +1028,12 @@ export const TaskContextUpdatedPayload = Schema.Struct({
 export const TaskDeletedPayload = Schema.Struct({
   taskId: TaskId,
   deletedAt: IsoDateTime,
+});
+
+export const TaskRunStartedPayload = Schema.Struct({
+  taskId: TaskId,
+  run: OrchestrationTaskRun,
+  updatedAt: IsoDateTime,
 });
 
 export const ThreadCreatedPayload = Schema.Struct({
@@ -1164,6 +1224,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("task.context-updated"),
     payload: TaskContextUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.run-started"),
+    payload: TaskRunStartedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

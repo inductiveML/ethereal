@@ -35,6 +35,7 @@ export type CreateTaskInput = CommandInput<"task.create">;
 export type UpdateTaskContextInput = CommandInput<"task.context.update">;
 export type DeleteTaskInput = CommandInput<"task.delete">;
 export type StartTaskHandoffInput = CommandInput<"task.handoff.start">;
+export type StartTaskRunInput = CommandInput<"task.run.start">;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -170,6 +171,18 @@ export const startTaskHandoff: (input: StartTaskHandoffInput) => CommandEffect =
   return yield* dispatch({
     ...input,
     type: "task.handoff.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const startTaskRun: (input: StartTaskRunInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.startTaskRun",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.run.start",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

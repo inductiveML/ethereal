@@ -23,6 +23,7 @@ import {
   TaskContextUpdatedPayload,
   TaskCreatedPayload,
   TaskDeletedPayload,
+  TaskRunStartedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -37,6 +38,7 @@ import {
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
 import { legacyTaskIdForThread } from "./taskIds.ts";
+import { appendRetainedTaskRun } from "./taskRuns.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -292,6 +294,7 @@ export function projectEvent(
             goal: payload.goal,
             context: payload.context,
             sessionThreadIds: [],
+            runs: [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -317,6 +320,21 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "task.run-started":
+      return decodeForEvent(TaskRunStartedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const task = nextBase.tasks.find((entry) => entry.id === payload.taskId);
+          if (!task) return nextBase;
+          return {
+            ...nextBase,
+            tasks: updateTask(nextBase.tasks, payload.taskId, {
+              runs: appendRetainedTaskRun(task.runs, payload.run),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
       );
 
     case "task.deleted":
@@ -380,6 +398,7 @@ export function projectEvent(
               goal: "",
               context: "",
               sessionThreadIds: [thread.id],
+              runs: [],
               createdAt: payload.createdAt,
               updatedAt: payload.updatedAt,
               deletedAt: null,

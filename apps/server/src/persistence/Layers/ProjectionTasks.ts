@@ -11,8 +11,14 @@ import {
 } from "../Services/ProjectionTasks.ts";
 import { TaskId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 const TaskLookup = Schema.Struct({ taskId: TaskId });
+const ProjectionTaskDbRow = ProjectionTask.mapFields(
+  Struct.assign({
+    runs: Schema.fromJsonString(ProjectionTask.fields.runs),
+  }),
+);
 
 const makeProjectionTaskRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -20,9 +26,9 @@ const makeProjectionTaskRepository = Effect.gen(function* () {
     Request: ProjectionTask,
     execute: (row) => sql`
       INSERT INTO projection_tasks (
-        task_id, project_id, title, goal, context, created_at, updated_at, deleted_at
+        task_id, project_id, title, goal, context, runs_json, created_at, updated_at, deleted_at
       ) VALUES (
-        ${row.taskId}, ${row.projectId}, ${row.title}, ${row.goal}, ${row.context},
+        ${row.taskId}, ${row.projectId}, ${row.title}, ${row.goal}, ${row.context}, ${JSON.stringify(row.runs)},
         ${row.createdAt}, ${row.updatedAt}, ${row.deletedAt}
       )
       ON CONFLICT (task_id) DO UPDATE SET
@@ -30,6 +36,7 @@ const makeProjectionTaskRepository = Effect.gen(function* () {
         title = excluded.title,
         goal = excluded.goal,
         context = excluded.context,
+        runs_json = excluded.runs_json,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at,
         deleted_at = excluded.deleted_at
@@ -37,18 +44,20 @@ const makeProjectionTaskRepository = Effect.gen(function* () {
   });
   const getRow = SqlSchema.findOneOption({
     Request: TaskLookup,
-    Result: ProjectionTask,
+    Result: ProjectionTaskDbRow,
     execute: ({ taskId }) => sql`
       SELECT task_id AS "taskId", project_id AS "projectId", title, goal, context,
+        runs_json AS "runs",
         created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
       FROM projection_tasks WHERE task_id = ${taskId}
     `,
   });
   const listRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionTask,
+    Result: ProjectionTaskDbRow,
     execute: () => sql`
       SELECT task_id AS "taskId", project_id AS "projectId", title, goal, context,
+        runs_json AS "runs",
         created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
       FROM projection_tasks ORDER BY created_at ASC, task_id ASC
     `,

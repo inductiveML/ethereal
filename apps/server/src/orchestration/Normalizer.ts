@@ -65,6 +65,13 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
+    if (command.type === "task.run.start") {
+      return {
+        ...command,
+        projectCwd: yield* normalizeProjectWorkspaceRoot(command.projectCwd),
+      } satisfies OrchestrationCommand;
+    }
+
     if (command.type !== "thread.turn.start") {
       return command as OrchestrationCommand;
     }

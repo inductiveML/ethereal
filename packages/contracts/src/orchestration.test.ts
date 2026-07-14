@@ -312,6 +312,55 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
   }),
 );
 
+it.effect("decodes a bounded parallel task run command", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "task.run.start",
+      commandId: "command-run",
+      taskId: "task-1",
+      runId: "run-1",
+      sourceThreadId: "thread-source",
+      title: "Parallel review",
+      instructions: "Review independently.",
+      projectCwd: "/tmp/project",
+      baseBranch: "main",
+      runSetupScript: true,
+      workers: [
+        {
+          threadId: "thread-worker-1",
+          messageId: "message-worker-1",
+          label: "Worker 1",
+          title: "First worker",
+          modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "ethereal/run/run-1/1-worker",
+          worktreePath: null,
+          instructions: "Inspect runtime behavior.",
+        },
+        {
+          threadId: "thread-worker-2",
+          messageId: "message-worker-2",
+          label: "Worker 2",
+          title: "Second worker",
+          modelSelection: { instanceId: "claudeAgent", model: "claude-opus-4-6" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "ethereal/run/run-1/2-worker",
+          worktreePath: null,
+          instructions: "Inspect UI behavior.",
+        },
+      ],
+      createdAt: "2026-07-14T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "task.run.start");
+    if (parsed.type === "task.run.start") {
+      assert.strictEqual(parsed.workers.length, 2);
+      assert.strictEqual(parsed.runSetupScript, true);
+    }
+  }),
+);
+
 it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadMetaUpdatedPayload({

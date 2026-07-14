@@ -25,6 +25,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  TaskId,
+  TaskRunId,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -4280,6 +4282,148 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ["thread.archive", "thread.session.stop"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "prepares every parallel run worker in an isolated worktree before atomic dispatch",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const projectCwd = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "parallel-run-project-",
+        });
+        const taskId = TaskId.make("task-parallel-run");
+        const runId = TaskRunId.make("run-parallel");
+        const sourceThreadId = ThreadId.make("thread-source");
+        const dispatchedCommands: OrchestrationCommand[] = [];
+        const createWorktree = vi.fn(
+          (input: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
+            Effect.succeed({
+              worktree: {
+                refName: input.newRefName ?? input.refName,
+                path: `/tmp/worktrees/${input.newRefName?.split("/").at(-1) ?? "existing"}`,
+              },
+            }),
+        );
+        const refreshStatus = vi.fn((_cwd: string) =>
+          Effect.succeed({
+            isRepo: true,
+            hasPrimaryRemote: false,
+            isDefaultRef: false,
+            refName: "main",
+            hasWorkingTreeChanges: false,
+            workingTree: { files: [], insertions: 0, deletions: 0 },
+            hasUpstream: false,
+            aheadCount: 0,
+            behindCount: 0,
+            pr: null,
+          }),
+        );
+
+        yield* buildAppUnderTest({
+          layers: {
+            gitVcsDriver: {
+              listRefs: () =>
+                Effect.succeed({
+                  refs: [],
+                  isRepo: true,
+                  hasPrimaryRemote: false,
+                  nextCursor: null,
+                  totalCount: 0,
+                }),
+              createWorktree,
+            },
+            vcsStatusBroadcaster: { refreshStatus },
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: 1 };
+                }),
+              readEvents: () => Stream.empty,
+            },
+            projectionSnapshotQuery: {
+              getProjectShellById: () =>
+                Effect.succeed(
+                  Option.some({
+                    id: defaultProjectId,
+                    title: "Default Project",
+                    workspaceRoot: projectCwd,
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  }),
+                ),
+              getTaskShellById: () =>
+                Effect.succeed(
+                  Option.some({
+                    id: taskId,
+                    projectId: defaultProjectId,
+                    title: "Parallel task",
+                    goal: "Compare approaches",
+                    context: "Keep changes isolated",
+                    sessionThreadIds: [sourceThreadId],
+                    runs: [],
+                    createdAt: "2026-01-01T00:00:00.000Z",
+                    updatedAt: "2026-01-01T00:00:00.000Z",
+                  }),
+                ),
+            },
+          },
+        });
+
+        const workerBranches = [`ethereal/run/${runId}/1-runtime`, `ethereal/run/${runId}/2-ui`];
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "task.run.start",
+              commandId: CommandId.make("cmd-parallel-run"),
+              taskId,
+              runId,
+              sourceThreadId,
+              title: "Parallel investigation",
+              instructions: "Investigate independently",
+              projectCwd,
+              baseBranch: "main",
+              runSetupScript: false,
+              workers: workerBranches.map((branch, index) => ({
+                threadId: ThreadId.make(`thread-worker-${index + 1}`),
+                messageId: MessageId.make(`message-worker-${index + 1}`),
+                label: `Worker ${index + 1}`,
+                title: `Worker ${index + 1}`,
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access" as const,
+                interactionMode: "default" as const,
+                branch,
+                worktreePath: null,
+                instructions: "",
+              })),
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          ),
+        );
+
+        assert.equal(response.sequence, 1);
+        assert.equal(createWorktree.mock.calls.length, 2);
+        assert.deepEqual(
+          createWorktree.mock.calls.map(([input]) => input.newRefName),
+          workerBranches,
+        );
+        const dispatched = dispatchedCommands[0];
+        assertTrue(dispatched?.type === "task.run.start");
+        if (dispatched?.type === "task.run.start") {
+          assert.deepEqual(
+            dispatched.workers.map((worker) => worker.worktreePath),
+            ["/tmp/worktrees/1-runtime", "/tmp/worktrees/2-ui"],
+          );
+        }
+        assert.deepEqual(
+          refreshStatus.mock.calls.map(([cwd]) => cwd),
+          ["/tmp/worktrees/1-runtime", "/tmp/worktrees/2-ui"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(

@@ -346,6 +346,150 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
     }
 
+    case "task.run.start": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const project = yield* requireProject({ readModel, command, projectId: task.projectId });
+      const sourceThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      if (!task.sessionThreadIds.includes(sourceThread.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${sourceThread.id}' is not a session of task '${task.id}'.`,
+        });
+      }
+      if (project.workspaceRoot !== command.projectCwd) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run workspace '${command.projectCwd}' does not match task project '${project.workspaceRoot}'.`,
+        });
+      }
+      if (task.runs.some((run) => run.id === command.runId)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Run '${command.runId}' already exists on task '${task.id}'.`,
+        });
+      }
+      const uniqueThreadIds = new Set(command.workers.map((worker) => worker.threadId));
+      const uniqueMessageIds = new Set(command.workers.map((worker) => worker.messageId));
+      const uniqueBranches = new Set(command.workers.map((worker) => worker.branch));
+      if (
+        uniqueThreadIds.size !== command.workers.length ||
+        uniqueMessageIds.size !== command.workers.length ||
+        uniqueBranches.size !== command.workers.length
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Parallel run workers must use unique thread, message, and branch identifiers.",
+        });
+      }
+      const runBranchPrefix = `ethereal/run/${command.runId}/`;
+      if (command.workers.some((worker) => !worker.branch.startsWith(runBranchPrefix))) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Parallel run branches must start with '${runBranchPrefix}'.`,
+        });
+      }
+      if (command.workers.some((worker) => worker.worktreePath === null)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Parallel run workers must be assigned isolated worktrees before dispatch.",
+        });
+      }
+
+      const runEvent: Omit<
+        Extract<OrchestrationEvent, { type: "task.run-started" }>,
+        "sequence"
+      > = {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: task.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.run-started",
+        payload: {
+          taskId: task.id,
+          run: {
+            id: command.runId,
+            title: command.title,
+            sourceThreadId: sourceThread.id,
+            instructions: command.instructions,
+            workers: command.workers.map((worker) => ({
+              threadId: worker.threadId,
+              label: worker.label,
+              modelSelection: worker.modelSelection,
+              branch: worker.branch,
+              worktreePath: worker.worktreePath!,
+            })),
+            createdAt: command.createdAt,
+          },
+          updatedAt: command.createdAt,
+        },
+      };
+      const readModelWithRun = yield* projectEvent(readModel, {
+        ...runEvent,
+        sequence: readModel.snapshotSequence + 1,
+      }).pipe(Effect.orDie);
+      const workerCommands = command.workers.flatMap((worker): OrchestrationCommand[] => {
+        const materializedInstructions = [
+          `Parallel run: ${command.title}`,
+          command.instructions.trim(),
+          `Assigned worker: ${worker.label}`,
+          worker.instructions.trim(),
+          "Work independently in the assigned isolated Git worktree. Inspect the repository state before editing and report the concrete outcome and validation results.",
+        ]
+          .filter((part) => part.length > 0)
+          .join("\n\n");
+        const message = buildTaskHandoffPrompt({
+          task,
+          sourceThread,
+          instructions: materializedInstructions,
+        });
+        return [
+          {
+            type: "thread.create",
+            commandId: command.commandId,
+            threadId: worker.threadId,
+            projectId: task.projectId,
+            taskId: task.id,
+            title: worker.title,
+            modelSelection: worker.modelSelection,
+            runtimeMode: worker.runtimeMode,
+            interactionMode: worker.interactionMode,
+            branch: worker.branch,
+            worktreePath: worker.worktreePath,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: worker.threadId,
+            message: {
+              messageId: worker.messageId,
+              role: "user",
+              text: message,
+              attachments: [],
+            },
+            modelSelection: worker.modelSelection,
+            titleSeed: worker.title,
+            runtimeMode: worker.runtimeMode,
+            interactionMode: worker.interactionMode,
+            createdAt: command.createdAt,
+          },
+        ];
+      });
+      return [
+        runEvent,
+        ...(yield* decideCommandSequence({
+          readModel: readModelWithRun,
+          commands: workerCommands,
+        })),
+      ];
+    }
+
     case "thread.create": {
       yield* requireProject({
         readModel,

@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   TaskId,
+  TaskRunId,
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
@@ -162,6 +163,88 @@ it.layer(NodeServices.layer)("task handoff", (it) => {
         expect(message.payload.text).toContain("receipt bus is the source of truth");
         expect(message.payload.text).toContain("found a replay race");
         expect(message.payload.text).toContain("Implement the fix");
+      }
+    }),
+  );
+
+  it.effect("records and starts parallel workers in isolated worktrees", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const runId = TaskRunId.make("run-parallel");
+      const result = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "task.run.start",
+          commandId: CommandId.make("command-run"),
+          taskId,
+          runId,
+          sourceThreadId,
+          title: "Reconnect investigation",
+          instructions: "Find independent failure modes.",
+          projectCwd: "/tmp/handoff",
+          baseBranch: "main",
+          workers: [
+            {
+              threadId: ThreadId.make("thread-worker-1"),
+              messageId: MessageId.make("message-worker-1"),
+              label: "Runtime worker",
+              title: "Runtime investigation",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5.4",
+              },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: `ethereal/run/${runId}/1-runtime`,
+              worktreePath: "/tmp/worktrees/runtime",
+              instructions: "Inspect receipt ordering.",
+            },
+            {
+              threadId: ThreadId.make("thread-worker-2"),
+              messageId: MessageId.make("message-worker-2"),
+              label: "UI worker",
+              title: "UI investigation",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: "claude-opus-4-6",
+              },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: `ethereal/run/${runId}/2-ui`,
+              worktreePath: "/tmp/worktrees/ui",
+              instructions: "Inspect reconnect rendering.",
+            },
+          ],
+          createdAt: now,
+        },
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "task.run-started",
+        "thread.created",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+        "thread.created",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ]);
+      const runStarted = events[0];
+      expect(runStarted?.type).toBe("task.run-started");
+      if (runStarted?.type === "task.run-started") {
+        expect(
+          runStarted.payload.run.workers.map(
+            (worker: { readonly worktreePath: string }) => worker.worktreePath,
+          ),
+        ).toEqual(["/tmp/worktrees/runtime", "/tmp/worktrees/ui"]);
+      }
+      const firstWorkerMessage = events[2];
+      const secondWorkerMessage = events[5];
+      if (firstWorkerMessage?.type === "thread.message-sent") {
+        expect(firstWorkerMessage.payload.text).toContain("Find independent failure modes.");
+        expect(firstWorkerMessage.payload.text).toContain("Assigned worker: Runtime worker");
+      }
+      if (secondWorkerMessage?.type === "thread.message-sent") {
+        expect(secondWorkerMessage.payload.text).toContain("Inspect reconnect rendering.");
       }
     }),
   );

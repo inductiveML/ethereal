@@ -1,4 +1,4 @@
-import { IsoDateTime, ProjectId, TaskId } from "@t3tools/contracts";
+import { IsoDateTime, OrchestrationTaskRun, ProjectId, TaskId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -12,6 +12,7 @@ export const ProjectionTask = Schema.Struct({
   title: Schema.String,
   goal: Schema.String,
   context: Schema.String,
+  runs: Schema.Array(OrchestrationTaskRun),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),

@@ -6,15 +6,23 @@ import {
   type CreateTaskInput,
   type DeleteTaskInput,
   type StartTaskHandoffInput,
+  type StartTaskRunInput,
   type UpdateTaskContextInput,
   createTask,
   deleteTask,
   startTaskHandoff,
+  startTaskRun,
   updateTaskContext,
 } from "../operations/commands.ts";
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 
-export type { CreateTaskInput, DeleteTaskInput, StartTaskHandoffInput, UpdateTaskContextInput };
+export type {
+  CreateTaskInput,
+  DeleteTaskInput,
+  StartTaskHandoffInput,
+  StartTaskRunInput,
+  UpdateTaskContextInput,
+};
 
 export function createTaskEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
@@ -47,6 +55,12 @@ export function createTaskEnvironmentAtoms<R, E>(
     startHandoff: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:task:start-handoff",
       execute: startTaskHandoff,
+      scheduler,
+      concurrency,
+    }),
+    startRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:task:start-run",
+      execute: startTaskRun,
       scheduler,
       concurrency,
     }),

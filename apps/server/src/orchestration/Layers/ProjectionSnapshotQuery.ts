@@ -9,6 +9,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationTask,
+  OrchestrationTaskRun,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
@@ -78,7 +79,11 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
   }),
 );
-const ProjectionTaskDbRowSchema = ProjectionTask;
+const ProjectionTaskDbRowSchema = ProjectionTask.mapFields(
+  Struct.assign({
+    runs: Schema.fromJsonString(Schema.Array(OrchestrationTaskRun)),
+  }),
+);
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
@@ -258,6 +263,7 @@ function mapTaskRow(
     goal: row.goal,
     context: row.context,
     sessionThreadIds,
+    runs: row.runs,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -448,6 +454,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionTaskDbRowSchema,
     execute: () => sql`
       SELECT task_id AS "taskId", project_id AS "projectId", title, goal, context,
+        runs_json AS "runs",
         created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
       FROM projection_tasks
       ORDER BY created_at ASC, task_id ASC
@@ -459,6 +466,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionTaskDbRowSchema,
     execute: ({ taskId }) => sql`
       SELECT task_id AS "taskId", project_id AS "projectId", title, goal, context,
+        runs_json AS "runs",
         created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
       FROM projection_tasks
       WHERE task_id = ${taskId} AND deleted_at IS NULL
@@ -1630,6 +1638,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       goal: row.goal,
                       context: row.context,
                       sessionThreadIds: taskSessions.get(row.taskId) ?? [],
+                      runs: row.runs,
                       createdAt: row.createdAt,
                       updatedAt: row.updatedAt,
                     }),
@@ -1793,6 +1802,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                       goal: row.goal,
                       context: row.context,
                       sessionThreadIds: taskSessions.get(row.taskId) ?? [],
+                      runs: row.runs,
                       createdAt: row.createdAt,
                       updatedAt: row.updatedAt,
                     }),
@@ -2092,6 +2102,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         sessionThreadIds: threadRows
           .filter((thread) => thread.taskId === taskId)
           .map((thread) => thread.threadId),
+        runs: row.runs,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       });

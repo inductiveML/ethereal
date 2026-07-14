@@ -73,6 +73,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "task.context.update":
     case "task.delete":
     case "task.handoff.start":
+    case "task.run.start":
       return {
         aggregateKind: "task",
         aggregateId: command.taskId,

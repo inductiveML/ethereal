@@ -1,4 +1,4 @@
-import { ProjectId, TaskId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, TaskId, TaskRunId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,18 +8,66 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
+import { ProjectionTaskRepositoryLive } from "./ProjectionTasks.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
+import { ProjectionTaskRepository } from "../Services/ProjectionTasks.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionTaskRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("round-trips durable task run metadata", () =>
+    Effect.gen(function* () {
+      const tasks = yield* ProjectionTaskRepository;
+      const taskId = TaskId.make("task-runs");
+      yield* tasks.upsert({
+        taskId,
+        projectId: ProjectId.make("project-runs"),
+        title: "Parallel task",
+        goal: "Compare implementations",
+        context: "Keep work isolated",
+        runs: [
+          {
+            id: TaskRunId.make("run-1"),
+            title: "Parallel review",
+            sourceThreadId: ThreadId.make("thread-source"),
+            instructions: "Review independently",
+            workers: [
+              {
+                threadId: ThreadId.make("thread-worker"),
+                label: "Reviewer",
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  model: "gpt-5.4",
+                },
+                branch: "ethereal/run/run-1/1-reviewer",
+                worktreePath: "/tmp/worktrees/reviewer",
+              },
+            ],
+            createdAt: "2026-07-14T00:00:00.000Z",
+          },
+        ],
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+        deletedAt: null,
+      });
+
+      const persisted = yield* tasks.getById(taskId);
+      assert.strictEqual(Option.getOrNull(persisted)?.runs[0]?.title, "Parallel review");
+      assert.strictEqual(
+        Option.getOrNull(persisted)?.runs[0]?.workers[0]?.worktreePath,
+        "/tmp/worktrees/reviewer",
+      );
+    }),
+  );
+
   it.effect("stores SQL NULL for missing project model options", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
