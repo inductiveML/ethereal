@@ -14,12 +14,16 @@ import {
   listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
+  requireTask,
+  requireTaskAbsent,
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { buildTaskHandoffPrompt } from "./taskHandoff.ts";
+import { legacyTaskIdForThread } from "./taskIds.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -211,6 +215,137 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "task.create": {
+      yield* requireProject({ readModel, command, projectId: command.projectId });
+      yield* requireTaskAbsent({ readModel, command, taskId: command.taskId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.created",
+        payload: {
+          taskId: command.taskId,
+          projectId: command.projectId,
+          title: command.title,
+          goal: command.goal,
+          context: command.context,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.context.update": {
+      yield* requireTask({ readModel, command, taskId: command.taskId });
+      if (
+        command.title === undefined &&
+        command.goal === undefined &&
+        command.context === undefined
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Task context update must change title, goal, or context.",
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.context-updated",
+        payload: {
+          taskId: command.taskId,
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.goal !== undefined ? { goal: command.goal } : {}),
+          ...(command.context !== undefined ? { context: command.context } : {}),
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "task.delete": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const activeSessions = task.sessionThreadIds
+        .map((threadId) => readModel.threads.find((thread) => thread.id === threadId))
+        .filter((thread) => thread !== undefined && thread.deletedAt === null);
+      if (activeSessions.length > 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Task '${command.taskId}' still has active sessions.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "task",
+          aggregateId: command.taskId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "task.deleted",
+        payload: { taskId: command.taskId, deletedAt: command.createdAt },
+      };
+    }
+
+    case "task.handoff.start": {
+      const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+      const sourceThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      if (!task.sessionThreadIds.includes(sourceThread.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${sourceThread.id}' is not a session of task '${task.id}'.`,
+        });
+      }
+      const message = buildTaskHandoffPrompt({
+        task,
+        sourceThread,
+        ...(command.instructions !== undefined ? { instructions: command.instructions } : {}),
+      });
+      return yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.create",
+            commandId: command.commandId,
+            threadId: command.targetThreadId,
+            projectId: task.projectId,
+            taskId: task.id,
+            title: command.title,
+            modelSelection: command.modelSelection,
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: command.targetThreadId,
+            message: {
+              messageId: command.messageId,
+              role: "user",
+              text: message,
+              attachments: [],
+            },
+            modelSelection: command.modelSelection,
+            titleSeed: command.title,
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            createdAt: command.createdAt,
+          },
+        ],
+      });
+    }
+
     case "thread.create": {
       yield* requireProject({
         readModel,
@@ -222,6 +357,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const taskId = command.taskId ?? legacyTaskIdForThread(command.threadId);
+      if (command.taskId !== undefined) {
+        const task = yield* requireTask({ readModel, command, taskId: command.taskId });
+        if (task.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Task '${task.id}' belongs to a different project.`,
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -233,6 +378,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          taskId,
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,

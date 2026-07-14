@@ -41,6 +41,7 @@ const PREPARED: PreparedConnection = {
 const LIVE_SHELL_SNAPSHOT: OrchestrationShellSnapshot = {
   snapshotSequence: 1,
   projects: [],
+  tasks: [],
   threads: [],
   updatedAt: "2026-06-06T00:00:00.000Z",
 };
@@ -142,6 +143,7 @@ describe("environment shell synchronization", () => {
       const cachedSnapshot: OrchestrationShellSnapshot = {
         snapshotSequence: 5,
         projects: [],
+        tasks: [],
         threads: [],
         updatedAt: "2026-06-06T00:00:00.000Z",
       };

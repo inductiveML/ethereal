@@ -31,6 +31,10 @@ type CommandInput<T extends CommandType> = Omit<
 export type CreateProjectInput = CommandInput<"project.create">;
 export type UpdateProjectInput = CommandInput<"project.meta.update">;
 export type DeleteProjectInput = CommandInput<"project.delete">;
+export type CreateTaskInput = CommandInput<"task.create">;
+export type UpdateTaskContextInput = CommandInput<"task.context.update">;
+export type DeleteTaskInput = CommandInput<"task.delete">;
+export type StartTaskHandoffInput = CommandInput<"task.handoff.start">;
 export type CreateThreadInput = CommandInput<"thread.create">;
 export type DeleteThreadInput = CommandInput<"thread.delete">;
 export type ArchiveThreadInput = CommandInput<"thread.archive">;
@@ -118,6 +122,54 @@ export const createThread: (input: CreateThreadInput) => CommandEffect = Effect.
   return yield* dispatch({
     ...input,
     type: "thread.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const createTask: (input: CreateTaskInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.createTask",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.create",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const updateTaskContext: (input: UpdateTaskContextInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.updateTaskContext",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.context.update",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const deleteTask: (input: DeleteTaskInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.deleteTask",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.delete",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const startTaskHandoff: (input: StartTaskHandoffInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.startTaskHandoff",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "task.handoff.start",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

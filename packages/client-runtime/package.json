@@ -111,6 +111,10 @@
       "types": "./src/state/terminal.ts",
       "default": "./src/state/terminal.ts"
     },
+    "./state/taskCommands": {
+      "types": "./src/state/taskCommands.ts",
+      "default": "./src/state/taskCommands.ts"
+    },
     "./state/threads": {
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"

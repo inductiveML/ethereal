@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
+import { ProjectId, TaskId, ThreadId, ProviderInstanceId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -78,6 +78,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       yield* threads.upsert({
         threadId: ThreadId.make("thread-null-options"),
         projectId: ProjectId.make("project-null-options"),
+        taskId: TaskId.make("task-null-options"),
         title: "Null options thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("claudeAgent"),

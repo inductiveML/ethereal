@@ -37,6 +37,7 @@ function shellState(input: {
             snapshotSequence: input.snapshotSequence ?? 1,
             updatedAt: input.updatedAt,
             projects: [],
+            tasks: [],
             threads: [],
           }),
     status: input.status,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderInstanceId, TaskId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -8,6 +8,7 @@ import { applyShellStreamEvent } from "./shellReducer.ts";
 const baseSnapshot: OrchestrationShellSnapshot = {
   snapshotSequence: 0,
   projects: [],
+  tasks: [],
   threads: [],
   updatedAt: "2026-04-01T00:00:00.000Z",
 };
@@ -152,6 +153,34 @@ describe("applyShellStreamEvent", () => {
 
       expect(next.threads).toHaveLength(1);
       expect(next.threads[0]?.title).toBe("Updated Thread");
+    });
+  });
+
+  describe("task events", () => {
+    it("upserts and removes durable task context", () => {
+      const task = {
+        id: TaskId.make("task-1"),
+        projectId: ProjectId.make("project-1"),
+        title: "Shared task",
+        goal: "Ship the fix",
+        context: "Tests are green",
+        sessionThreadIds: [ThreadId.make("thread-1")],
+        createdAt: "2026-04-01T00:00:00.000Z",
+        updatedAt: "2026-04-01T00:00:01.000Z",
+      };
+      const withTask = applyShellStreamEvent(baseSnapshot, {
+        kind: "task-upserted",
+        sequence: 6,
+        task,
+      });
+      expect(withTask.tasks).toEqual([task]);
+
+      const withoutTask = applyShellStreamEvent(withTask, {
+        kind: "task-removed",
+        sequence: 7,
+        taskId: task.id,
+      });
+      expect(withoutTask.tasks).toEqual([]);
     });
   });
 

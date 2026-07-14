@@ -631,6 +631,26 @@ const makeWsRpcLayer = (
                 projectId: event.payload.projectId,
               }),
             );
+          case "task.created":
+          case "task.context-updated":
+            return projectionSnapshotQuery.getTaskShellById(event.payload.taskId).pipe(
+              Effect.map((task) =>
+                Option.map(task, (nextTask) => ({
+                  kind: "task-upserted" as const,
+                  sequence: event.sequence,
+                  task: nextTask,
+                })),
+              ),
+              Effect.orElseSucceed(() => Option.none()),
+            );
+          case "task.deleted":
+            return Effect.succeed(
+              Option.some({
+                kind: "task-removed" as const,
+                sequence: event.sequence,
+                taskId: event.payload.taskId,
+              }),
+            );
           case "thread.deleted":
           case "thread.archived":
             return Effect.succeed(
@@ -817,6 +837,9 @@ const makeWsRpcLayer = (
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
+                ...(bootstrap.createThread.taskId !== undefined
+                  ? { taskId: bootstrap.createThread.taskId }
+                  : {}),
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,

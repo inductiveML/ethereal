@@ -1,4 +1,10 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  OrchestrationTask,
+  TaskId,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -14,6 +20,9 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  TaskContextUpdatedPayload,
+  TaskCreatedPayload,
+  TaskDeletedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -27,6 +36,7 @@ import {
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
+import { legacyTaskIdForThread } from "./taskIds.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -67,6 +77,14 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateTask(
+  tasks: ReadonlyArray<OrchestrationTask>,
+  taskId: TaskId,
+  patch: Partial<Omit<OrchestrationTask, "id" | "projectId">>,
+): OrchestrationTask[] {
+  return tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task));
 }
 
 function decodeForEvent<A>(
@@ -182,6 +200,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
+    tasks: [],
     threads: [],
     updatedAt: nowIso,
   };
@@ -263,6 +282,54 @@ export function projectEvent(
         })),
       );
 
+    case "task.created":
+      return decodeForEvent(TaskCreatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const task: OrchestrationTask = {
+            id: payload.taskId,
+            projectId: payload.projectId,
+            title: payload.title,
+            goal: payload.goal,
+            context: payload.context,
+            sessionThreadIds: [],
+            createdAt: payload.createdAt,
+            updatedAt: payload.updatedAt,
+            deletedAt: null,
+          };
+          const existing = nextBase.tasks.some((entry) => entry.id === task.id);
+          return {
+            ...nextBase,
+            tasks: existing
+              ? nextBase.tasks.map((entry) => (entry.id === task.id ? task : entry))
+              : [...nextBase.tasks, task],
+          };
+        }),
+      );
+
+    case "task.context-updated":
+      return decodeForEvent(TaskContextUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          tasks: updateTask(nextBase.tasks, payload.taskId, {
+            ...(payload.title !== undefined ? { title: payload.title } : {}),
+            ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
+            ...(payload.context !== undefined ? { context: payload.context } : {}),
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "task.deleted":
+      return decodeForEvent(TaskDeletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          tasks: updateTask(nextBase.tasks, payload.taskId, {
+            deletedAt: payload.deletedAt,
+            updatedAt: payload.deletedAt,
+          }),
+        })),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -276,6 +343,7 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            taskId: payload.taskId ?? legacyTaskIdForThread(payload.threadId),
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -295,9 +363,33 @@ export function projectEvent(
           event.type,
           "thread",
         );
+        const taskId = payload.taskId ?? legacyTaskIdForThread(payload.threadId);
+        const existingTask = nextBase.tasks.find((entry) => entry.id === taskId);
+        const nextTask: OrchestrationTask = existingTask
+          ? {
+              ...existingTask,
+              sessionThreadIds: existingTask.sessionThreadIds.includes(thread.id)
+                ? existingTask.sessionThreadIds
+                : [...existingTask.sessionThreadIds, thread.id],
+              updatedAt: payload.updatedAt,
+            }
+          : {
+              id: taskId,
+              projectId: payload.projectId,
+              title: payload.title,
+              goal: "",
+              context: "",
+              sessionThreadIds: [thread.id],
+              createdAt: payload.createdAt,
+              updatedAt: payload.updatedAt,
+              deletedAt: null,
+            };
         const existing = nextBase.threads.find((entry) => entry.id === thread.id);
         return {
           ...nextBase,
+          tasks: existingTask
+            ? nextBase.tasks.map((entry) => (entry.id === taskId ? nextTask : entry))
+            : [...nextBase.tasks, nextTask],
           threads: existing
             ? nextBase.threads.map((entry) => (entry.id === thread.id ? thread : entry))
             : [...nextBase.threads, thread],

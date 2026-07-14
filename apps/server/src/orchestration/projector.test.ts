@@ -3,6 +3,7 @@ import {
   EventId,
   ProjectId,
   ProviderDriverKind,
+  TaskId,
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
@@ -28,7 +29,9 @@ function makeEvent(input: {
     aggregateId:
       input.aggregateKind === "project"
         ? ProjectId.make(input.aggregateId)
-        : ThreadId.make(input.aggregateId),
+        : input.aggregateKind === "task"
+          ? TaskId.make(input.aggregateId)
+          : ThreadId.make(input.aggregateId),
     occurredAt: input.occurredAt,
     commandId: input.commandId === null ? null : CommandId.make(input.commandId),
     causationEventId: null,
@@ -76,6 +79,7 @@ describe("orchestration projector", () => {
       {
         id: "thread-1",
         projectId: "project-1",
+        taskId: "legacy-thread-1",
         title: "demo",
         modelSelection: {
           instanceId: "codex",
@@ -95,6 +99,19 @@ describe("orchestration projector", () => {
         activities: [],
         checkpoints: [],
         session: null,
+      },
+    ]);
+    expect(next.tasks).toEqual([
+      {
+        id: "legacy-thread-1",
+        projectId: "project-1",
+        title: "demo",
+        goal: "",
+        context: "",
+        sessionThreadIds: ["thread-1"],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
       },
     ]);
   });

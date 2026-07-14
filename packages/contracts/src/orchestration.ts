@@ -16,6 +16,7 @@ import {
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  TaskId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -214,6 +215,23 @@ export const OrchestrationProject = Schema.Struct({
 });
 export type OrchestrationProject = typeof OrchestrationProject.Type;
 
+/**
+ * Durable, provider-neutral context shared by the coding-agent sessions that
+ * collaborate on one user task.
+ */
+export const OrchestrationTask = Schema.Struct({
+  id: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: Schema.String,
+  context: Schema.String,
+  sessionThreadIds: Schema.Array(ThreadId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationTask = typeof OrchestrationTask.Type;
+
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
@@ -337,6 +355,7 @@ export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  taskId: Schema.optional(TaskId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -363,6 +382,7 @@ export type OrchestrationThread = typeof OrchestrationThread.Type;
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
+  tasks: Schema.Array(OrchestrationTask).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   threads: Schema.Array(OrchestrationThread),
   updatedAt: IsoDateTime,
 });
@@ -380,9 +400,22 @@ export const OrchestrationProjectShell = Schema.Struct({
 });
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 
+export const OrchestrationTaskShell = Schema.Struct({
+  id: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: Schema.String,
+  context: Schema.String,
+  sessionThreadIds: Schema.Array(ThreadId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationTaskShell = typeof OrchestrationTaskShell.Type;
+
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  taskId: Schema.optional(TaskId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -406,6 +439,7 @@ export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProjectShell),
+  tasks: Schema.Array(OrchestrationTaskShell).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   threads: Schema.Array(OrchestrationThreadShell),
   updatedAt: IsoDateTime,
 });
@@ -421,6 +455,16 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     kind: Schema.Literal("project-removed"),
     sequence: NonNegativeInt,
     projectId: ProjectId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task-upserted"),
+    sequence: NonNegativeInt,
+    task: OrchestrationTaskShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task-removed"),
+    sequence: NonNegativeInt,
+    taskId: TaskId,
   }),
   Schema.Struct({
     kind: Schema.Literal("thread-upserted"),
@@ -504,11 +548,57 @@ const ProjectDeleteCommand = Schema.Struct({
   force: Schema.optional(Schema.Boolean),
 });
 
+const TaskCreateCommand = Schema.Struct({
+  type: Schema.Literal("task.create"),
+  commandId: CommandId,
+  taskId: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: Schema.String,
+  context: Schema.String,
+  createdAt: IsoDateTime,
+});
+
+const TaskContextUpdateCommand = Schema.Struct({
+  type: Schema.Literal("task.context.update"),
+  commandId: CommandId,
+  taskId: TaskId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  goal: Schema.optional(Schema.String),
+  context: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+
+const TaskDeleteCommand = Schema.Struct({
+  type: Schema.Literal("task.delete"),
+  commandId: CommandId,
+  taskId: TaskId,
+  createdAt: IsoDateTime,
+});
+
+const TaskHandoffStartCommand = Schema.Struct({
+  type: Schema.Literal("task.handoff.start"),
+  commandId: CommandId,
+  taskId: TaskId,
+  sourceThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  messageId: MessageId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  instructions: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+
 const ThreadCreateCommand = Schema.Struct({
   type: Schema.Literal("thread.create"),
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  taskId: Schema.optional(TaskId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -567,6 +657,7 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
+  taskId: Schema.optional(TaskId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -676,6 +767,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  TaskCreateCommand,
+  TaskContextUpdateCommand,
+  TaskDeleteCommand,
+  TaskHandoffStartCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -697,6 +792,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
+  TaskCreateCommand,
+  TaskContextUpdateCommand,
+  TaskDeleteCommand,
+  TaskHandoffStartCommand,
   ThreadCreateCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
@@ -799,6 +898,9 @@ export const OrchestrationEventType = Schema.Literals([
   "project.created",
   "project.meta-updated",
   "project.deleted",
+  "task.created",
+  "task.context-updated",
+  "task.deleted",
   "thread.created",
   "thread.deleted",
   "thread.archived",
@@ -821,7 +923,7 @@ export const OrchestrationEventType = Schema.Literals([
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "task", "thread"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -851,9 +953,33 @@ export const ProjectDeletedPayload = Schema.Struct({
   deletedAt: IsoDateTime,
 });
 
+export const TaskCreatedPayload = Schema.Struct({
+  taskId: TaskId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  goal: Schema.String,
+  context: Schema.String,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const TaskContextUpdatedPayload = Schema.Struct({
+  taskId: TaskId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  goal: Schema.optional(Schema.String),
+  context: Schema.optional(Schema.String),
+  updatedAt: IsoDateTime,
+});
+
+export const TaskDeletedPayload = Schema.Struct({
+  taskId: TaskId,
+  deletedAt: IsoDateTime,
+});
+
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  taskId: Schema.optional(TaskId),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1005,7 +1131,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, TaskId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1028,6 +1154,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("project.deleted"),
     payload: ProjectDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.created"),
+    payload: TaskCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.context-updated"),
+    payload: TaskContextUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("task.deleted"),
+    payload: TaskDeletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
