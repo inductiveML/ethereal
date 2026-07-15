@@ -44,6 +44,8 @@ import {
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
+  type ServerConfig,
+  type ServerProvider,
   type SidebarProjectGroupingMode,
   ThreadId,
 } from "@t3tools/contracts";
@@ -204,6 +206,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -302,6 +305,7 @@ function buildThreadJumpLabelMap(input: {
 
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
+  provider: ServerProvider | null;
   projectCwd: string | null;
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
@@ -363,6 +367,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     attemptArchiveThread,
     openPrLink,
     thread,
+    provider,
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
@@ -681,6 +686,29 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </Tooltip>
           )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+          {provider ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label={`${provider.displayName ?? provider.instanceId} agent`}
+                    className="inline-flex shrink-0 items-center justify-center text-muted-foreground/70"
+                  />
+                }
+              >
+                <ProviderInstanceIcon
+                  accentColor={provider.accentColor}
+                  className="size-3.5"
+                  displayName={provider.displayName ?? provider.instanceId}
+                  driverKind={provider.driver}
+                  iconClassName="size-3.5"
+                />
+              </TooltipTrigger>
+              <TooltipPopup side="top">
+                {provider.displayName ?? provider.instanceId} · {thread.modelSelection.model}
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
           {renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -858,6 +886,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 });
 
 interface SidebarProjectThreadListProps {
+  serverConfigs: ReadonlyMap<SidebarThreadSummary["environmentId"], ServerConfig>;
   projectKey: string;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
@@ -943,6 +972,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     openPrLink,
     expandThreadListForProject,
     collapseThreadListForProject,
+    serverConfigs,
   } = props;
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
@@ -965,10 +995,17 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       {shouldShowThreadPanel &&
         renderedThreads.map((thread) => {
           const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+          const provider =
+            serverConfigs
+              .get(thread.environmentId)
+              ?.providers.find(
+                (candidate) => candidate.instanceId === thread.modelSelection.instanceId,
+              ) ?? null;
           return (
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
+              provider={provider}
               projectCwd={projectCwd}
               orderedProjectThreadKeys={orderedProjectThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
@@ -2268,6 +2305,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       </div>
 
       <SidebarProjectThreadList
+        serverConfigs={serverConfigs}
         projectKey={project.projectKey}
         projectExpanded={projectExpanded}
         hasOverflowingThreads={hasOverflowingThreads}

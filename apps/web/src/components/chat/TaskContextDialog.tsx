@@ -4,9 +4,8 @@ import {
   type OrchestrationTaskShell,
   type OrchestrationThreadShell,
   type ServerProvider,
-  type TaskRunId,
 } from "@t3tools/contracts";
-import { ArrowRightIcon, ClipboardListIcon } from "lucide-react";
+import { ArrowRightIcon, ClipboardListIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -21,8 +20,8 @@ import {
   DialogTrigger,
 } from "../ui/dialog";
 import { Textarea } from "../ui/textarea";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { TaskRunsPanel, type TaskRunStartInput } from "./TaskRunsPanel";
 
 interface TaskContextDialogProps {
   readonly task: OrchestrationTaskShell;
@@ -39,10 +38,6 @@ interface TaskContextDialogProps {
     readonly modelSelection: ModelSelection;
     readonly instructions: string;
   }) => Promise<boolean>;
-  readonly onStartRun: (input: TaskRunStartInput) => Promise<boolean>;
-  readonly onCancelRun: (runId: TaskRunId) => Promise<boolean>;
-  readonly onMarkRunReviewReady: (runId: TaskRunId) => Promise<boolean>;
-  readonly onCleanupRun: (runId: TaskRunId) => Promise<boolean>;
 }
 
 function selectableProviders(providers: ReadonlyArray<ServerProvider>) {
@@ -64,10 +59,6 @@ export const TaskContextDialog = memo(function TaskContextDialog({
   disabled = false,
   onSave,
   onHandoff,
-  onStartRun,
-  onCancelRun,
-  onMarkRunReviewReady,
-  onCleanupRun,
 }: TaskContextDialogProps) {
   const availableProviders = useMemo(() => selectableProviders(providers), [providers]);
   const defaultProvider =
@@ -151,15 +142,25 @@ export const TaskContextDialog = memo(function TaskContextDialog({
         />
         <TooltipPopup side="bottom">Task context and handoff</TooltipPopup>
       </Tooltip>
-      <DialogPopup className="max-w-2xl">
+      <DialogPopup className="max-w-2xl" showCloseButton={false}>
+        <Button
+          aria-label="Close task context"
+          className="absolute end-3 top-3 z-10"
+          onClick={() => setOpen(false)}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <XIcon />
+        </Button>
         <DialogHeader>
           <DialogTitle>Task context</DialogTitle>
           <DialogDescription>
-            Shared context stays above provider sessions and follows handoffs.
+            A project is the workspace. Each conversation has its own task; its shared goal and
+            context follow only agent sessions created through handoff.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-5">
-          <label className="block space-y-1.5 text-sm">
+        <DialogPanel className="space-y-6">
+          <label className="flex flex-col gap-2 text-sm">
             <span className="font-medium">Title</span>
             <input
               className="h-9 w-full rounded-lg border border-input bg-background px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -167,7 +168,7 @@ export const TaskContextDialog = memo(function TaskContextDialog({
               onChange={(event) => setTitle(event.target.value)}
             />
           </label>
-          <label className="block space-y-1.5 text-sm">
+          <label className="flex flex-col gap-2 text-sm">
             <span className="font-medium">Shared goal</span>
             <Textarea
               placeholder="What must this task accomplish?"
@@ -175,7 +176,7 @@ export const TaskContextDialog = memo(function TaskContextDialog({
               onChange={(event) => setGoal(event.target.value)}
             />
           </label>
-          <label className="block space-y-1.5 text-sm">
+          <label className="flex flex-col gap-2 text-sm">
             <span className="font-medium">Canonical context</span>
             <Textarea
               className="min-h-28"
@@ -203,53 +204,57 @@ export const TaskContextDialog = memo(function TaskContextDialog({
               ))}
             </div>
           </div>
-          <TaskRunsPanel
-            disabled={busy !== null}
-            onCancelRun={onCancelRun}
-            onCleanupRun={onCleanupRun}
-            onMarkReviewReady={onMarkRunReviewReady}
-            onStartRun={onStartRun}
-            providers={availableProviders}
-            sessions={sessions}
-            task={task}
-          />
-          <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-4">
-            <div>
+          <div className="space-y-4 rounded-xl border border-border bg-muted/30 p-4">
+            <div className="space-y-1">
               <div className="text-sm font-medium">Hand off to another agent</div>
               <div className="text-xs text-muted-foreground">
                 Ethereal will materialize the shared task, recent conversation, plan, and changed
                 files into the new session.
               </div>
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label className="space-y-1 text-xs text-muted-foreground">
-                Provider
-                <select
-                  className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground"
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-2 text-xs text-muted-foreground">
+                <span>Provider</span>
+                <Select
                   value={selectedProvider?.instanceId ?? ""}
-                  onChange={(event) => setInstanceId(event.target.value as ProviderInstanceId)}
+                  onValueChange={(value) => {
+                    if (value) setInstanceId(value as ProviderInstanceId);
+                  }}
                 >
-                  {availableProviders.map((provider) => (
-                    <option key={provider.instanceId} value={provider.instanceId}>
-                      {provider.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1 text-xs text-muted-foreground">
-                Model
-                <select
-                  className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm text-foreground"
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                >
-                  {(selectedProvider?.models ?? []).map((candidate) => (
-                    <option key={candidate.slug} value={candidate.slug}>
-                      {candidate.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <SelectTrigger aria-label="Handoff provider" className="w-full">
+                    <SelectValue>{selectedProvider?.displayName ?? "Choose provider"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup alignItemWithTrigger={false}>
+                    {availableProviders.map((provider) => (
+                      <SelectItem
+                        hideIndicator
+                        key={provider.instanceId}
+                        value={provider.instanceId}
+                      >
+                        {provider.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2 text-xs text-muted-foreground">
+                <span>Model</span>
+                <Select value={model} onValueChange={(value) => value && setModel(value)}>
+                  <SelectTrigger aria-label="Handoff model" className="w-full">
+                    <SelectValue>
+                      {selectedProvider?.models.find((candidate) => candidate.slug === model)
+                        ?.name ?? "Choose model"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup alignItemWithTrigger={false}>
+                    {(selectedProvider?.models ?? []).map((candidate) => (
+                      <SelectItem hideIndicator key={candidate.slug} value={candidate.slug}>
+                        {candidate.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
             </div>
             <Textarea
               placeholder="Optional instructions for the receiving agent."
