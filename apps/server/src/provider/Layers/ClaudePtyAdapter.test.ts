@@ -175,7 +175,7 @@ describe("ClaudePtyAdapter", () => {
         sessionId,
       );
       const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
-      assert.deepEqual(harness.process.writes.slice(-2), ["\u001b[200~hello\u001b[201~", "\r"]);
+      assert.deepEqual(harness.process.writes.slice(-2), ["hello", "\r"]);
       yield* Effect.promise(async () => {
         await harness.getOnHook()!({
           hook_event_name: "UserPromptSubmit",
@@ -278,7 +278,7 @@ describe("ClaudePtyAdapter", () => {
       const session = yield* Fiber.join(startFiber);
       assert.equal(session.status, "ready");
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello" });
-      assert.deepEqual(harness.process.writes.slice(-2), ["\u001b[200~hello\u001b[201~", "\r"]);
+      assert.deepEqual(harness.process.writes.slice(-2), ["hello", "\r"]);
     }).pipe(Effect.scoped);
   });
 
@@ -750,6 +750,56 @@ describe("ClaudePtyAdapter", () => {
 
       assert.include(harness.process.writes, "\u0004");
       assert.isFalse(harness.process.writes.some((write) => write.includes("/exit")));
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("treats SIGTERM from an intentional stop as graceful", () => {
+    const harness = makeHarness({ shutdownGraceMs: 20 });
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "auto-accept-edits",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+
+      const stopFiber = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkScoped);
+      yield* Effect.promise(() => sleepReal(25));
+      assert.include(harness.process.kills, "SIGTERM");
+      harness.process.emitExit({ exitCode: 143, signal: 15 });
+      yield* Fiber.join(stopFiber);
+      yield* settle;
+
+      assert.isFalse(events.some((event) => event.type === "runtime.error"));
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "session.exited" &&
+            event.payload.exitKind === "graceful" &&
+            event.payload.reason === "Session stopped",
+        ),
+      );
+      assert.isFalse(yield* adapter.hasSession(THREAD_ID));
     }).pipe(Effect.scoped);
   });
 

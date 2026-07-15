@@ -49,7 +49,7 @@ import {
   buildClaudePtyLaunchSpec,
   claudePtyOutputRequestsWorkspaceTrust,
   durableClaudeTranscriptOffset,
-  encodeClaudeBracketedPaste,
+  encodeClaudeTypedInput,
   initialClaudePtyReadiness,
   parseClaudeTranscriptRecord,
   type ClaudePtyReadiness,
@@ -840,7 +840,11 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       providerRefs: { providerTurnId: turnId },
     });
     yield* Effect.try({
-      try: () => process.write(encodeClaudeBracketedPaste(prompt)),
+      // Do not synthesize bracketed-paste control sequences here. Claude Code
+      // treats those as a real OS paste and may import unrelated clipboard
+      // contents (including file attachments) instead of only these bytes.
+      // LF is Claude's native chat:newline key; CR below submits the prompt.
+      try: () => process.write(encodeClaudeTypedInput(prompt)),
       catch: (cause) =>
         new ProviderAdapterRequestError({
           provider: PROVIDER,
@@ -1232,15 +1236,19 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     event: PtyAdapter.PtyExitEvent,
   ) {
     if (context.stopped) return;
+    const intentionalStop = context.stopping;
+    const gracefulExit = intentionalStop || event.exitCode === 0;
+    const exitReason = intentionalStop
+      ? "Session stopped"
+      : `Claude exited with code ${event.exitCode}.`;
     context.stopped = true;
     if (context.readinessSettleTimer) clearTimeout(context.readinessSettleTimer);
     context.readinessSettleTimer = undefined;
     context.readiness = advanceClaudePtyReadiness(context.readiness, {
       type: "process-exit",
-      reason: `Claude exited with code ${event.exitCode}.`,
+      reason: exitReason,
     });
-    context.resolveExit(event);
-    context.rejectReady(new Error(`Claude exited with code ${event.exitCode}.`));
+    context.rejectReady(new Error(exitReason));
     context.transcriptTailer?.close();
     yield* Effect.promise(() => resolveAllApprovals(context, "cancel"));
     yield* Effect.promise(() =>
@@ -1249,17 +1257,17 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     if (context.currentTurn) {
       yield* completeTurn(
         context,
-        context.currentTurn.interruptRequested || event.exitCode === 0 ? "interrupted" : "failed",
+        context.currentTurn.interruptRequested || gracefulExit ? "interrupted" : "failed",
       );
     }
     context.session = {
       ...context.session,
-      status: event.exitCode === 0 ? "closed" : "error",
+      status: gracefulExit ? "closed" : "error",
       activeTurnId: undefined,
       updatedAt: now(),
-      ...(event.exitCode === 0 ? {} : { lastError: `Claude exited with code ${event.exitCode}.` }),
+      ...(gracefulExit ? {} : { lastError: exitReason }),
     };
-    if (!context.stopping || event.exitCode !== 0) {
+    if (!intentionalStop) {
       yield* emit({
         type: "runtime.error",
         ...stamp(),
@@ -1281,18 +1289,26 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       providerInstanceId: boundInstanceId,
       threadId: context.session.threadId,
       payload: {
-        reason: `Claude exited with code ${event.exitCode}.`,
-        exitKind: event.exitCode === 0 ? "graceful" : "error",
-        recoverable: true,
+        reason: exitReason,
+        exitKind: gracefulExit ? "graceful" : "error",
+        recoverable: !intentionalStop,
       },
       providerRefs: {},
     });
-    sessionsByThread.delete(context.session.threadId);
-    sessionsByClaudeId.delete(context.sessionId);
+    if (sessionsByThread.get(context.session.threadId) === context) {
+      sessionsByThread.delete(context.session.threadId);
+    }
+    if (sessionsByClaudeId.get(context.sessionId) === context) {
+      sessionsByClaudeId.delete(context.sessionId);
+    }
     if (context.hookServer) {
       yield* Effect.tryPromise(() => context.hookServer!.close()).pipe(Effect.ignore);
       context.hookServer = undefined;
     }
+    // Resolve only after lifecycle events and cleanup are complete. A session
+    // restart waits on this promise; resolving earlier let the replacement PTY
+    // start while the old exit handler could still delete or stop it.
+    context.resolveExit(event);
   });
 
   const requireSession = (
@@ -1432,8 +1448,12 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     }).pipe(
       Effect.tapError(() =>
         Effect.sync(() => {
-          sessionsByThread.delete(input.threadId);
-          sessionsByClaudeId.delete(sessionId);
+          if (sessionsByThread.get(input.threadId) === context) {
+            sessionsByThread.delete(input.threadId);
+          }
+          if (sessionsByClaudeId.get(sessionId) === context) {
+            sessionsByClaudeId.delete(sessionId);
+          }
         }),
       ),
     );
@@ -1499,8 +1519,12 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
             if (context.hookServer) {
               yield* Effect.tryPromise(() => context.hookServer!.close()).pipe(Effect.ignore);
             }
-            sessionsByThread.delete(input.threadId);
-            sessionsByClaudeId.delete(sessionId);
+            if (sessionsByThread.get(input.threadId) === context) {
+              sessionsByThread.delete(input.threadId);
+            }
+            if (sessionsByClaudeId.get(sessionId) === context) {
+              sessionsByClaudeId.delete(sessionId);
+            }
           }),
         ),
       );
@@ -1759,8 +1783,12 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       activeTurnId: undefined,
       updatedAt: now(),
     };
-    sessionsByThread.delete(context.session.threadId);
-    sessionsByClaudeId.delete(context.sessionId);
+    if (sessionsByThread.get(context.session.threadId) === context) {
+      sessionsByThread.delete(context.session.threadId);
+    }
+    if (sessionsByClaudeId.get(context.sessionId) === context) {
+      sessionsByClaudeId.delete(context.sessionId);
+    }
     if (context.hookServer) {
       yield* Effect.tryPromise(() => context.hookServer!.close()).pipe(Effect.ignore);
       context.hookServer = undefined;

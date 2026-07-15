@@ -5,7 +5,7 @@ import {
   buildClaudePtyLaunchSpec,
   claudePtyOutputRequestsWorkspaceTrust,
   consumeClaudeTranscriptBytes,
-  encodeClaudeBracketedPaste,
+  encodeClaudeTypedInput,
   initialClaudePtyReadiness,
   initialClaudeTranscriptCursor,
   parseClaudePtyCapabilities,
@@ -164,9 +164,11 @@ describe("ClaudePtyProtocol", () => {
     ).toThrow(/reserved.*settings/i);
   });
 
-  it("neutralizes control sequences before bracketed paste", () => {
-    const encoded = encodeClaudeBracketedPaste("hello\r\nworld\u001b[201~oops\u0000");
-    expect(encoded).toBe("\u001b[200~hello\nworld[201~oops\uFFFD\u001b[201~");
+  it("neutralizes control sequences without entering terminal paste mode", () => {
+    const encoded = encodeClaudeTypedInput("hello\r\nworld\u001b[201~oops\u0000");
+    expect(encoded).toBe("hello\nworld[201~oops\uFFFD");
+    expect(encoded).not.toContain("\u001b[200~");
+    expect(encoded).not.toContain("\u001b[201~");
   });
 
   it.each([
@@ -174,9 +176,8 @@ describe("ClaudePtyProtocol", () => {
     ["multiline", "one\ntwo\n```ts\nconst value = '🪶'\n```"],
     ["carriage returns", "one\rtwo\r\nthree"],
   ])("preserves safe %s prompt content", (_label, prompt) => {
-    const encoded = encodeClaudeBracketedPaste(prompt);
-    expect(encoded.startsWith("\u001b[200~")).toBe(true);
-    expect(encoded.endsWith("\u001b[201~")).toBe(true);
+    const encoded = encodeClaudeTypedInput(prompt);
+    expect(encoded).toBe(prompt.replace(/\r\n?/g, "\n"));
     expect(encoded).not.toContain("\u0000");
   });
 

@@ -23,10 +23,10 @@ import { createModelSelection } from "@t3tools/shared/model";
 const CODEX_INSTANCE = ProviderInstanceId.make("codex");
 const CODEX_SECONDARY_INSTANCE = ProviderInstanceId.make("codex_secondary");
 const CLAUDE_AGENT_INSTANCE = ProviderInstanceId.make("claudeAgent");
-const CURSOR_INSTANCE = ProviderInstanceId.make("cursor");
+const FIXTURE_INSTANCE = ProviderInstanceId.make("fixture");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
-const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const FIXTURE_DRIVER = ProviderDriverKind.make("fixture");
 
 type ProviderOptionSelectionBag = ReadonlyArray<ProviderOptionSelection>;
 type ProviderOptionSelectionsByProvider = Partial<Record<string, ProviderOptionSelectionBag>>;
@@ -750,7 +750,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
-      runtimeMode: "full-access",
+      runtimeMode: "auto-accept-edits",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
@@ -761,7 +761,7 @@ describe("composerDraftStore project draft thread mapping", () => {
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
-      runtimeMode: "full-access",
+      runtimeMode: "auto-accept-edits",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
@@ -1270,12 +1270,12 @@ describe("composerDraftStore modelSelection", () => {
     );
   });
 
-  it("keeps explicit Cursor reset overrides on the selection", () => {
+  it("keeps explicit fixture reset overrides on the selection", () => {
     const store = useComposerDraftStore.getState();
 
     store.setModelSelection(
       threadRef,
-      modelSelection(CURSOR_DRIVER, "claude-opus-4-6", {
+      modelSelection(FIXTURE_DRIVER, "claude-opus-4-6", {
         reasoning: "xhigh",
         fastMode: true,
         thinking: false,
@@ -1284,14 +1284,14 @@ describe("composerDraftStore modelSelection", () => {
 
     store.setProviderModelOptions(
       threadRef,
-      CURSOR_DRIVER,
+      FIXTURE_DRIVER,
       toSelections({ reasoning: "medium", fastMode: false, thinking: true }),
     );
 
     expect(
-      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CURSOR_INSTANCE],
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[FIXTURE_INSTANCE],
     ).toEqual(
-      modelSelection(CURSOR_DRIVER, "claude-opus-4-6", {
+      modelSelection(FIXTURE_DRIVER, "claude-opus-4-6", {
         reasoning: "medium",
         fastMode: false,
         thinking: true,
@@ -1299,25 +1299,25 @@ describe("composerDraftStore modelSelection", () => {
     );
   });
 
-  it("preserves the selected Cursor model when only traits change", () => {
+  it("preserves the selected fixture model when only traits change", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setProviderModelOptions(threadRef, CURSOR_DRIVER, toSelections({ reasoning: "high" }), {
+    store.setProviderModelOptions(threadRef, FIXTURE_DRIVER, toSelections({ reasoning: "high" }), {
       model: "gpt-5.4",
       persistSticky: true,
     });
 
     expect(
-      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CURSOR_INSTANCE],
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[FIXTURE_INSTANCE],
     ).toEqual(
-      modelSelection(CURSOR_DRIVER, "gpt-5.4", {
+      modelSelection(FIXTURE_DRIVER, "gpt-5.4", {
         reasoning: "high",
       }),
     );
     expect(
-      useComposerDraftStore.getState().stickyModelSelectionByProvider[CURSOR_INSTANCE],
+      useComposerDraftStore.getState().stickyModelSelectionByProvider[FIXTURE_INSTANCE],
     ).toEqual(
-      modelSelection(CURSOR_DRIVER, "gpt-5.4", {
+      modelSelection(FIXTURE_DRIVER, "gpt-5.4", {
         reasoning: "high",
       }),
     );
@@ -1544,11 +1544,11 @@ describe("composerDraftStore sticky composer settings", () => {
     expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("codex");
   });
 
-  it("drops empty cursor model options when normalizing sticky state", () => {
+  it("drops empty fixture model options when normalizing sticky state", () => {
     const store = useComposerDraftStore.getState();
 
     store.setStickyModelSelection(
-      modelSelection(CURSOR_DRIVER, "gpt-5.4", {
+      modelSelection(FIXTURE_DRIVER, "gpt-5.4", {
         reasoning: undefined,
         fastMode: undefined,
         thinking: undefined,
@@ -1557,9 +1557,9 @@ describe("composerDraftStore sticky composer settings", () => {
     );
 
     expect(
-      useComposerDraftStore.getState().stickyModelSelectionByProvider[CURSOR_INSTANCE],
-    ).toEqual(modelSelection(CURSOR_DRIVER, "gpt-5.4"));
-    expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("cursor");
+      useComposerDraftStore.getState().stickyModelSelectionByProvider[FIXTURE_INSTANCE],
+    ).toEqual(modelSelection(FIXTURE_DRIVER, "gpt-5.4"));
+    expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("fixture");
   });
 
   it("applies sticky activeProvider to new drafts", () => {

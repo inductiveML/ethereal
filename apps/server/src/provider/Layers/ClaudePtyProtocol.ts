@@ -228,12 +228,14 @@ export function buildClaudePtyLaunchSpec(input: {
   return { command: input.binaryPath, args, cwd: input.cwd, environment };
 }
 
-export function encodeClaudeBracketedPaste(input: string): string {
+export function encodeClaudeTypedInput(input: string): string {
   const withoutEscapes = input.replace(/\r\n?/g, "\n").replaceAll(String.fromCharCode(27), "");
-  const normalized = [...withoutEscapes]
+  return [...withoutEscapes]
     .map((character) => {
       const code = character.codePointAt(0) ?? 0;
       return (code >= 0 && code <= 8) ||
+        // LF is Claude's native chat:newline key (Ctrl+J). Keeping it lets
+        // multiline prompts be typed without triggering terminal paste mode.
         code === 11 ||
         code === 12 ||
         (code >= 14 && code <= 31) ||
@@ -242,7 +244,6 @@ export function encodeClaudeBracketedPaste(input: string): string {
         : character;
     })
     .join("");
-  return `\u001b[200~${normalized}\u001b[201~`;
 }
 
 export type ClaudePtyReadinessState =

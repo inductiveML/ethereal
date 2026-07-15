@@ -1377,7 +1377,10 @@ const make = Effect.gen(function* () {
               ...(event.providerInstanceId !== undefined
                 ? { providerInstanceId: event.providerInstanceId }
                 : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              // The thread owns the requested runtime mode. Session lifecycle
+              // events can race the command reactor's binding update, so the
+              // previous session projection is not authoritative here.
+              runtimeMode: thread.runtimeMode,
               activeTurnId: nextActiveTurnId,
               lastError,
               updatedAt: now,
@@ -1627,7 +1630,7 @@ const make = Effect.gen(function* () {
               ...(event.providerInstanceId !== undefined
                 ? { providerInstanceId: event.providerInstanceId }
                 : {}),
-              runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              runtimeMode: thread.runtimeMode,
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
               updatedAt: now,
