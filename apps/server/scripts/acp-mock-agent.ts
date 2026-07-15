@@ -17,24 +17,15 @@ const emitToolCalls = process.env.T3_ACP_EMIT_TOOL_CALLS === "1";
 const emitInterleavedAssistantToolCalls =
   process.env.T3_ACP_EMIT_INTERLEAVED_ASSISTANT_TOOL_CALLS === "1";
 const emitGenericToolPlaceholders = process.env.T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
-const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
-const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
-const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
 const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
 const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
-const omitXAiPromptCompleteStopReason =
-  process.env.T3_ACP_OMIT_XAI_PROMPT_COMPLETE_STOP_REASON === "1";
 const failLoadSession = process.env.T3_ACP_FAIL_LOAD_SESSION === "1";
 const emitLoadReplay = process.env.T3_ACP_EMIT_LOAD_REPLAY === "1";
 const hangLoadSessionAfterReplay = process.env.T3_ACP_HANG_LOAD_SESSION_AFTER_REPLAY === "1";
 const delayLoadSessionAfterReplay = process.env.T3_ACP_DELAY_LOAD_SESSION_AFTER_REPLAY === "1";
 const loadSessionDelayMs = Number(process.env.T3_ACP_LOAD_SESSION_DELAY_MS ?? "5000");
-const emitStaleXAiPromptCompleteBeforeSecondHang =
-  process.env.T3_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
-const emitOverlappingXAiPromptCompleteOutOfOrder =
-  process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
@@ -54,19 +45,7 @@ let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
 let promptCount = 0;
-let overlappingFirstPromptId: string | undefined;
 const cancelledSessions = new Set<string>();
-
-function promptIdFromRequestMeta(
-  request: Pick<AcpSchema.PromptRequest, "_meta">,
-): string | undefined {
-  const meta = request._meta;
-  if (meta === null || typeof meta !== "object") {
-    return undefined;
-  }
-  const promptId = meta.promptId ?? meta.requestId;
-  return typeof promptId === "string" && promptId.length > 0 ? promptId : undefined;
-}
 
 function logExit(reason: string): void {
   if (!exitLogPath) {
@@ -224,35 +203,6 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   ];
 }
 
-function modelConfigOptionsFor(modelId: string): ReadonlyArray<AcpSchema.SessionConfigOption> {
-  const previousModelId = currentModelId;
-  try {
-    currentModelId = modelId;
-    return configOptions().filter(
-      (option) => option.category !== "mode" && option.category !== "model",
-    );
-  } finally {
-    currentModelId = previousModelId;
-  }
-}
-
-function availableModels(): ReadonlyArray<{
-  readonly value: string;
-  readonly name: string;
-  readonly configOptions: ReadonlyArray<AcpSchema.SessionConfigOption>;
-}> {
-  return [
-    { value: "default", name: "Auto" },
-    { value: "composer-2", name: "Composer 2" },
-    { value: "gpt-5.4", name: "GPT-5.4" },
-    { value: "claude-opus-4-6", name: "Opus 4.6" },
-  ].map((model) => ({
-    value: model.value,
-    name: model.name,
-    configOptions: modelConfigOptionsFor(model.value),
-  }));
-}
-
 const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
   {
     id: "ask",
@@ -278,18 +228,18 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
-const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
-  { modelId: "grok-build", name: "Grok Build" },
-  { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
+const mockAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: "mock-model", name: "Mock Model" },
+  { modelId: "mock-model-alt", name: "Mock Model Alt" },
 ];
 
 function modelState(): AcpSchema.SessionModelState {
-  const modelId = grokAcpModels.some((model) => model.modelId === currentModelId)
+  const modelId = mockAcpModels.some((model) => model.modelId === currentModelId)
     ? currentModelId
-    : "grok-build";
+    : "mock-model";
   return {
     currentModelId: modelId,
-    availableModels: grokAcpModels,
+    availableModels: mockAcpModels,
   };
 }
 
@@ -382,7 +332,7 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
-      if (!grokAcpModels.some((model) => model.modelId === request.modelId)) {
+      if (!mockAcpModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
           {
@@ -465,118 +415,7 @@ const program = Effect.gen(function* () {
         return yield* AcpError.AcpRequestError.internalError("Mock prompt failure");
       }
 
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
-        return {
-          stopReason: "end_turn",
-          _meta: {
-            promptId: "mock-stale-xai-prompt-1",
-            requestId: "mock-stale-xai-prompt-1",
-          },
-        };
-      }
-
-      if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 2) {
-        const currentPromptId = promptIdFromRequestMeta(request) ?? "mock-current-xai-prompt-2";
-        writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-          sessionId: requestedSessionId,
-          promptId: "mock-stale-xai-prompt-1",
-          stopReason: "end_turn",
-          agentResult: null,
-        });
-
-        writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-          sessionId: requestedSessionId,
-          promptId: currentPromptId,
-          stopReason: "end_turn",
-          agentResult: null,
-        });
-
-        return yield* Effect.never;
-      }
-
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 1) {
-        overlappingFirstPromptId = promptIdFromRequestMeta(request);
-        return yield* Effect.never;
-      }
-
-      if (emitOverlappingXAiPromptCompleteOutOfOrder && promptCount === 2) {
-        const secondPromptId = promptIdFromRequestMeta(request);
-        if (overlappingFirstPromptId !== undefined && secondPromptId !== undefined) {
-          writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-            sessionId: requestedSessionId,
-            promptId: secondPromptId,
-            stopReason: "end_turn",
-            agentResult: null,
-          });
-          writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-            sessionId: requestedSessionId,
-            promptId: overlappingFirstPromptId,
-            stopReason: "end_turn",
-            agentResult: null,
-          });
-        }
-        return yield* Effect.never;
-      }
-
       if (hangPromptForever || (hangFirstPromptForever && promptCount === 1)) {
-        return yield* Effect.never;
-      }
-
-      if (emitXAiPromptCompleteThenHang) {
-        writeJsonRpcNotification("session/update", {
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "hello from " },
-          },
-        });
-
-        if (emitForeignSessionUpdates) {
-          writeJsonRpcNotification("session/update", {
-            sessionId: "mock-child-session-1",
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "child before completion" },
-            },
-          });
-        }
-
-        writeJsonRpcNotification("_x.ai/session/prompt_complete", {
-          sessionId: requestedSessionId,
-          promptId: promptIdFromRequestMeta(request) ?? "mock-xai-prompt-1",
-          ...(omitXAiPromptCompleteStopReason ? {} : { stopReason: "end_turn" }),
-          agentResult: null,
-        });
-
-        if (emitForeignSessionUpdates) {
-          writeJsonRpcNotification("session/update", {
-            sessionId: "mock-child-session-1",
-            update: {
-              sessionUpdate: "tool_call",
-              toolCallId: "child-tool-call-1",
-              title: "Child-only tool",
-              kind: "other",
-              status: "pending",
-              rawInput: {},
-            },
-          });
-          writeJsonRpcNotification("session/update", {
-            sessionId: "mock-child-session-1",
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "child after completion" },
-            },
-          });
-        }
-
-        writeJsonRpcNotification("session/update", {
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "mock" },
-          },
-        });
-
         return yield* Effect.never;
       }
 
@@ -754,62 +593,6 @@ const program = Effect.gen(function* () {
         return { stopReason: "end_turn" };
       }
 
-      if (emitAskQuestion) {
-        yield* agent.client.extRequest("cursor/ask_question", {
-          toolCallId: "ask-question-tool-call-1",
-          title: "Question",
-          questions: [
-            {
-              id: "scope",
-              prompt: "Which scope?",
-              options: [
-                { id: "workspace", label: "Workspace" },
-                { id: "session", label: "Session" },
-              ],
-            },
-          ],
-        });
-
-        return { stopReason: "end_turn" };
-      }
-
-      if (emitXAiAskUserQuestion) {
-        const result = yield* agent.client.extRequest("_x.ai/ask_user_question", {
-          method: "x.ai/ask_user_question",
-          params: {
-            sessionId: requestedSessionId,
-            toolCallId: "ask-user-question-tool-call-1",
-            questions: [
-              {
-                question: "Which scope should Grok use?",
-                multiSelect: null,
-                options: [
-                  { label: "Workspace", description: "Use the current workspace" },
-                  { label: "Session", description: "Only use this session" },
-                ],
-              },
-            ],
-            mode: "default",
-          },
-        });
-        if (typeof result !== "object" || result === null || !("outcome" in result)) {
-          throw new Error("Expected _x.ai/ask_user_question response outcome.");
-        }
-        if (result.outcome === "cancelled") {
-          return { stopReason: "end_turn" };
-        }
-        if (
-          result.outcome !== "accepted" ||
-          !("answers" in result) ||
-          typeof result.answers !== "object" ||
-          result.answers === null
-        ) {
-          throw new Error("Expected accepted _x.ai/ask_user_question response answers.");
-        }
-
-        return { stopReason: "end_turn" };
-      }
-
       if (emitForeignSessionUpdates) {
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -878,12 +661,6 @@ const program = Effect.gen(function* () {
   );
 
   yield* agent.handleUnknownExtRequest((method, params) => {
-    if (method === "cursor/list_available_models") {
-      return Effect.succeed({
-        models: availableModels(),
-      });
-    }
-
     if (method !== "session/mode/set") {
       return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
     }

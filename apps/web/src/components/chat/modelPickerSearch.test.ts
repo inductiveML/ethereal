@@ -80,8 +80,8 @@ describe("scoreModelPickerSearch", () => {
     );
     const nonFavoriteScore = scoreModelPickerSearch(
       {
-        driverKind: "cursor",
-        providerDisplayName: "Cursor",
+        driverKind: "fixture",
+        providerDisplayName: "Fixture",
         name: "Opus 4.5",
       },
       "opu",
@@ -104,8 +104,8 @@ describe("scoreModelPickerSearch", () => {
     );
     const nonFavoriteExactScore = scoreModelPickerSearch(
       {
-        driverKind: "cursor",
-        providerDisplayName: "Cursor",
+        driverKind: "fixture",
+        providerDisplayName: "Fixture",
         name: "Opus 4.7",
       },
       "opus 4.7",

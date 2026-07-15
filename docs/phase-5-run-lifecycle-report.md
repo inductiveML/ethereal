@@ -126,9 +126,8 @@ dirty-tree refusal.
 - Planner/worker/reviewer graphs and Fable review remain future work.
 - Nine unrelated React nested-component warnings and existing build source-map/chunk warnings
   remain.
-- The live development run logged non-blocking Chromium cache-directory, unavailable Grok health,
-  LegendList recycling, and shutdown-time preview-focus warnings; readiness and lifecycle behavior
-  were unaffected.
+- The live development run logged non-blocking Chromium cache-directory, LegendList recycling, and
+  shutdown-time preview-focus warnings; readiness and lifecycle behavior were unaffected.
 
 ## Commit list
 

@@ -15,7 +15,6 @@ Install and authenticate at least one supported provider before starting Etherea
 
 - Codex: install the [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`.
 - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`.
-- Cursor: install the [Cursor CLI](https://cursor.com/cli) and run `cursor-agent login`.
 - OpenCode: install [OpenCode](https://opencode.ai) and authenticate it.
 
 ## Development

@@ -13,7 +13,6 @@ type EditorDefinition = {
 };
 
 export const EDITORS = [
-  { id: "cursor", label: "Cursor", commands: ["cursor"], launchStyle: "goto" },
   { id: "trae", label: "Trae", commands: ["trae"], launchStyle: "goto" },
   { id: "kiro", label: "Kiro", commands: ["kiro"], baseArgs: ["ide"], launchStyle: "goto" },
   { id: "vscode", label: "VS Code", commands: ["code"], launchStyle: "goto" },

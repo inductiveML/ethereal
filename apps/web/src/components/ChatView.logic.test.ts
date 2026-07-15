@@ -186,7 +186,7 @@ describe("getStartedThreadModelChangeBlockReason", () => {
       instanceId: ProviderInstanceId.make("codex"),
     },
     {
-      instanceId: ProviderInstanceId.make("grok"),
+      instanceId: ProviderInstanceId.make("restricted"),
       requiresNewThreadForModelChange: true,
     },
   ];
@@ -197,12 +197,12 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         providers,
         hasStartedSession: false,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("restricted"),
+          model: "restricted-build",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-other",
+          instanceId: ProviderInstanceId.make("restricted"),
+          model: "restricted-other",
         },
       }),
     ).toBeNull();
@@ -214,12 +214,12 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         providers,
         hasStartedSession: true,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("restricted"),
+          model: "restricted-build",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("restricted"),
+          model: "restricted-build",
         },
       }),
     ).toBeNull();
@@ -235,8 +235,8 @@ describe("getStartedThreadModelChangeBlockReason", () => {
           model: "gpt-5.4",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("restricted"),
+          model: "restricted-build",
         },
       }),
     ).toEqual({

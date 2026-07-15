@@ -8,7 +8,6 @@ import { Group, GroupSeparator } from "../ui/group";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "../ui/menu";
 import {
   AntigravityIcon,
-  CursorIcon,
   Icon,
   KiroIcon,
   TraeIcon,
@@ -37,11 +36,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 const resolveOptions = (platform: string, availableEditors: ReadonlyArray<EditorId>) => {
   const baseOptions: ReadonlyArray<{ label: string; Icon: Icon; value: EditorId }> = [
-    {
-      label: "Cursor",
-      Icon: CursorIcon,
-      value: "cursor",
-    },
     {
       label: "Trae",
       Icon: TraeIcon,

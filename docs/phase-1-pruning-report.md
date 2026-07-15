@@ -238,8 +238,7 @@ rendering, streaming, and durable sessions remain intact.
 
 ### Other provider adapters
 
-Cursor, OpenCode, and Grok were retained because they exercise the provider-neutral architecture
-and may remain supported.
+OpenCode was retained because it exercises the provider-neutral architecture and remains supported.
 
 ### Provider-neutral runtime
 
@@ -435,7 +434,6 @@ Manual checks completed:
 
 Observed non-blocking warnings:
 
-- Grok health check failed because the Grok CLI was not installed.
 - The existing list-rendering warning remained.
 - Chromium logged stale cache-path errors.
 - None prevented the tested desktop vertical slice.

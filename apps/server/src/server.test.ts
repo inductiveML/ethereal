@@ -3020,20 +3020,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.shellOpenInEditor]({
             cwd: "/tmp/project",
-            editor: "cursor",
+            editor: "zed",
           }),
         ),
       );
 
-      assert.deepEqual(openedInput, { cwd: "/tmp/project", editor: "cursor" });
+      assert.deepEqual(openedInput, { cwd: "/tmp/project", editor: "zed" });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc shell.openInEditor errors", () =>
     Effect.gen(function* () {
       const externalLauncherError = new ExternalLauncherCommandNotFoundError({
-        editor: "cursor",
-        command: "cursor",
+        editor: "zed",
+        command: "zed",
       });
       yield* buildAppUnderTest({
         layers: {
@@ -3048,7 +3048,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.shellOpenInEditor]({
             cwd: "/tmp/project",
-            editor: "cursor",
+            editor: "zed",
           }),
         ).pipe(Effect.result),
       );

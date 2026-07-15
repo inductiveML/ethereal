@@ -68,7 +68,7 @@ describe("LocalApi", () => {
     await expect(api.server.getConfig()).rejects.toThrow(
       "Local backend API is unavailable before a backend is paired.",
     );
-    await expect(api.shell.openInEditor("/tmp", "cursor")).rejects.toThrow(
+    await expect(api.shell.openInEditor("/tmp", "zed")).rejects.toThrow(
       "Local backend API is unavailable before a backend is paired.",
     );
   });
