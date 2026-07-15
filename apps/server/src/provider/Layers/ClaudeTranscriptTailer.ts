@@ -76,6 +76,17 @@ const nodeWatcherFactory: ClaudeTranscriptWatcherFactory = (path, onChange) => {
   return { close: () => watcher.close() };
 };
 
+function cursorEquals(left: ClaudeTranscriptCursor, right: ClaudeTranscriptCursor): boolean {
+  if (
+    left.offset !== right.offset ||
+    left.fileId !== right.fileId ||
+    left.pending.byteLength !== right.pending.byteLength
+  ) {
+    return false;
+  }
+  return left.pending.every((byte, index) => byte === right.pending[index]);
+}
+
 export function startClaudeTranscriptTailer(input: {
   readonly path: string;
   readonly onRecord: (record: Record<string, unknown>) => void | Promise<void>;
@@ -90,11 +101,13 @@ export function startClaudeTranscriptTailer(input: {
   let cursor = input.initialCursor ?? initialClaudeTranscriptCursor;
   let closed = false;
   let active: Promise<void> | null = null;
+  let pollRequested = false;
 
   const pollOnce = async (): Promise<boolean> => {
     if (closed) return false;
     try {
       const result = await pollClaudeTranscript(reader, input.path, cursor);
+      const cursorChanged = !cursorEquals(cursor, result.cursor);
       cursor = result.cursor;
       if (result.truncated || result.replaced) {
         await input.onWarning?.("Claude transcript was replaced; tailing restarted at byte zero.");
@@ -105,7 +118,10 @@ export function startClaudeTranscriptTailer(input: {
       for (const record of result.records) {
         await input.onRecord(record);
       }
-      await input.onCursor?.(cursor);
+      // The 75 ms correctness poll must stay cheap while Claude is idle.
+      // Persisting an identical cursor would rebuild the session object on
+      // every tick and create avoidable projection and GC pressure.
+      if (cursorChanged) await input.onCursor?.(cursor);
       return result.cursor.offset < (await reader.size(input.path));
     } catch (cause) {
       const code =
@@ -120,15 +136,23 @@ export function startClaudeTranscriptTailer(input: {
   };
 
   const pollNow = () => {
+    pollRequested = true;
     if (active) return active;
     active = (async () => {
-      // Drain bounded 1 MiB chunks without one unbounded allocation. Yielding
-      // between chunks keeps a large existing transcript off the event loop.
-      for (let chunk = 0; chunk < 64; chunk++) {
-        if (closed) break;
-        const hasMore = await pollOnce();
-        if (!hasMore) break;
-        await new Promise<void>((resolve) => setImmediate(resolve));
+      for (;;) {
+        pollRequested = false;
+        // Drain bounded 1 MiB chunks without one unbounded allocation. Yielding
+        // between chunks keeps a large existing transcript off the event loop.
+        for (let chunk = 0; chunk < 64; chunk++) {
+          if (closed) break;
+          const hasMore = await pollOnce();
+          if (!hasMore) break;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        // A watcher or lifecycle hook may request a poll while the current
+        // read is active. Coalesce that burst into one additional drain so a
+        // Stop hook cannot resolve against a stale end-of-file observation.
+        if (closed || !pollRequested) break;
       }
     })().finally(() => {
       active = null;

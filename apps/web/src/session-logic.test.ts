@@ -691,24 +691,65 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
-  it("omits tool started entries and keeps completed entries", () => {
+  it("shows an in-progress tool immediately and collapses its completion", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "tool-complete",
         createdAt: "2026-02-23T00:00:03.000Z",
         summary: "Tool call complete",
         kind: "tool.completed",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "completed",
+          data: { toolCallId: "tool-call-1", command: "pwd" },
+        },
       }),
       makeActivity({
         id: "tool-start",
         createdAt: "2026-02-23T00:00:02.000Z",
         summary: "Tool call",
         kind: "tool.started",
+        payload: {
+          itemType: "command_execution",
+          title: "Bash",
+          status: "inProgress",
+          data: { toolCallId: "tool-call-1", input: { command: "pwd" } },
+        },
       }),
     ];
 
     const entries = deriveWorkLogEntries(activities);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "tool-complete",
+      toolTitle: "Bash",
+      command: "pwd",
+      toolLifecycleStatus: "completed",
+    });
+  });
+
+  it("keeps a started tool visible while it is still running", () => {
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "tool-start",
+        kind: "tool.started",
+        summary: "Read started",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read",
+          status: "inProgress",
+          data: { toolCallId: "tool-read-1", input: { file_path: "/repo/README.md" } },
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      toolTitle: "Read",
+      toolLifecycleStatus: "inProgress",
+      sourceActivityKind: "tool.started",
+    });
   });
 
   it("omits task.started but shows task.progress and task.completed", () => {

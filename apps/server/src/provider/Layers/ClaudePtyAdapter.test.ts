@@ -215,6 +215,7 @@ describe("ClaudePtyAdapter", () => {
           transcript_path: transcriptPath(sessionId),
           cwd: "/repo",
           prompt_id: "prompt-hello",
+          last_assistant_message: "Hi",
         });
       });
       yield* settle;
@@ -227,6 +228,11 @@ describe("ClaudePtyAdapter", () => {
       assert.isTrue(
         events.some((event) => event.type === "content.delta" && event.payload.delta === "Hi"),
       );
+      assert.equal(
+        events.filter((event) => event.type === "content.delta" && event.payload.delta === "Hi")
+          .length,
+        1,
+      );
       assert.isTrue(
         events.some(
           (event) =>
@@ -238,7 +244,9 @@ describe("ClaudePtyAdapter", () => {
           (event) =>
             event.type === "item.completed" &&
             event.providerRefs?.providerItemId === "tool-1" &&
-            event.payload.itemType === "command_execution",
+            event.payload.itemType === "command_execution" &&
+            event.payload.title === "Bash" &&
+            (event.payload.data as { command?: unknown })?.command === "pwd",
         ),
       );
       assert.isTrue(
@@ -391,6 +399,225 @@ describe("ClaudePtyAdapter", () => {
       );
       assert.isTrue(
         events.some((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("uses Stop.last_assistant_message after earlier assistant text and tools", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+      const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "inspect" });
+      yield* Effect.promise(async () => {
+        await harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-tool-lagged",
+          prompt: "inspect",
+        });
+        await harness.getOnTranscriptRecord()!({
+          type: "user",
+          uuid: "user-tool-lagged",
+          message: { content: "inspect" },
+        });
+        await harness.getOnTranscriptRecord()!({
+          type: "assistant",
+          uuid: "assistant-tool-lagged",
+          message: {
+            content: [
+              { type: "text", text: "I'll inspect it." },
+              { type: "tool_use", id: "tool-lagged", name: "Read", input: {} },
+            ],
+            stop_reason: "tool_use",
+          },
+        });
+        await harness.getOnTranscriptRecord()!({
+          type: "user",
+          uuid: "result-tool-lagged",
+          message: {
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "tool-lagged",
+                content: "contents",
+                is_error: false,
+              },
+            ],
+          },
+        });
+        await harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-tool-lagged",
+          last_assistant_message: "Final answer after the tool.",
+        });
+      });
+      yield* settle;
+
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "content.delta" &&
+            event.payload.delta === "Final answer after the tool.",
+        ),
+      );
+      assert.isTrue(
+        events.some((event) => event.type === "turn.completed" && event.turnId === turn.turnId),
+      );
+    }).pipe(Effect.scoped);
+  });
+
+  it.effect("drains every pending tool and final message before Stop completes", () => {
+    let emitStopBatch = false;
+    const harness = makeHarness({
+      transcriptTailerFactory: (input) => ({
+        close: () => {},
+        getCursor: () => ({ offset: 4_096, pending: new Uint8Array() }),
+        pollNow: async () => {
+          if (!emitStopBatch) return;
+          emitStopBatch = false;
+          await input.onRecord({
+            type: "assistant",
+            uuid: "assistant-batched-tool",
+            message: {
+              content: [
+                { type: "text", text: "Checking now." },
+                { type: "tool_use", id: "tool-batched", name: "Bash", input: { command: "pwd" } },
+              ],
+              stop_reason: "tool_use",
+            },
+          });
+          await input.onRecord({
+            type: "user",
+            uuid: "result-batched-tool",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tool-batched",
+                  content: "/repo",
+                  is_error: false,
+                },
+              ],
+            },
+          });
+          await input.onRecord({
+            type: "assistant",
+            uuid: "assistant-batched-final",
+            message: {
+              content: [{ type: "text", text: "Finished after the tool." }],
+              stop_reason: "end_turn",
+            },
+          });
+        },
+      }),
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* harness.make;
+      const events: ProviderRuntimeEvent[] = [];
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkScoped,
+      );
+      const startFiber = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          cwd: "/repo",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkScoped);
+      yield* settle;
+      const spawn = harness.spawns[0]!;
+      const sessionId = spawn.args?.[(spawn.args?.indexOf("--session-id") ?? -1) + 1] as string;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "SessionStart",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+        }),
+      );
+      yield* Fiber.join(startFiber);
+      const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "run a tool" });
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "UserPromptSubmit",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-batched-tool",
+          prompt: "run a tool",
+        }),
+      );
+
+      emitStopBatch = true;
+      yield* Effect.promise(() =>
+        harness.getOnHook()!({
+          hook_event_name: "Stop",
+          session_id: sessionId,
+          transcript_path: transcriptPath(sessionId),
+          cwd: "/repo",
+          prompt_id: "prompt-batched-tool",
+          last_assistant_message: "Finished after the tool.",
+        }),
+      );
+      yield* settle;
+
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "item.started" &&
+            event.providerRefs?.providerItemId === "tool-batched" &&
+            event.payload.itemType === "command_execution",
+        ),
+      );
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "item.completed" &&
+            event.providerRefs?.providerItemId === "tool-batched",
+        ),
+      );
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && event.payload.delta === "Finished after the tool.",
+        ),
+      );
+      assert.equal(
+        events.filter((event) => event.type === "turn.completed" && event.turnId === turn.turnId)
+          .length,
+        1,
       );
     }).pipe(Effect.scoped);
   });

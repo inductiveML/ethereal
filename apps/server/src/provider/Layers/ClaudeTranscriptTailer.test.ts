@@ -122,4 +122,88 @@ describe("pollClaudeTranscript", () => {
     expect(reader.read).toHaveBeenCalledTimes(1);
     expect(records).toEqual([{ type: "system" }]);
   });
+
+  it("does not publish unchanged cursors during idle correctness polls", async () => {
+    const bytes = new TextEncoder().encode('{"type":"system"}\n');
+    const reader = {
+      size: vi.fn(async () => bytes.byteLength),
+      read: vi.fn(async (_path: string, offset: number, length: number) =>
+        bytes.slice(offset, offset + length),
+      ),
+    };
+    const cursors: number[] = [];
+    const tailer = startClaudeTranscriptTailer({
+      path: "/watched",
+      reader,
+      pollIntervalMs: 60_000,
+      watcherFactory: null,
+      onRecord: () => {},
+      onCursor: (cursor) => {
+        cursors.push(cursor.offset);
+      },
+    });
+
+    await tailer.pollNow();
+    await tailer.pollNow();
+    tailer.close();
+
+    expect(cursors).toEqual([bytes.byteLength]);
+    expect(reader.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains bytes appended while a poll is active before resolving pollNow", async () => {
+    const encoder = new TextEncoder();
+    let file = encoder.encode('{"type":"assistant","n":1}\n');
+    let notify = () => {};
+    let releaseEofCheck = () => {};
+    let eofCheckStarted = () => {};
+    const eofCheckPending = new Promise<void>((resolve) => {
+      eofCheckStarted = resolve;
+    });
+    const eofCheckBlocked = new Promise<void>((resolve) => {
+      releaseEofCheck = resolve;
+    });
+    let sizeCount = 0;
+    const reader = {
+      size: vi.fn(async () => {
+        sizeCount += 1;
+        const size = file.byteLength;
+        if (sizeCount === 2) {
+          eofCheckStarted();
+          await eofCheckBlocked;
+        }
+        return size;
+      }),
+      read: vi.fn(async (_path: string, offset: number, length: number) =>
+        file.slice(offset, offset + length),
+      ),
+    };
+    const records: Record<string, unknown>[] = [];
+    const tailer = startClaudeTranscriptTailer({
+      path: "/watched",
+      reader,
+      pollIntervalMs: 60_000,
+      watcherFactory: (_path, onChange) => {
+        notify = onChange;
+        return { close: () => {} };
+      },
+      onRecord: (record) => {
+        records.push(record);
+      },
+    });
+
+    await eofCheckPending;
+    file = encoder.encode('{"type":"assistant","n":1}\n{"type":"assistant","n":2}\n');
+    notify();
+    const drained = tailer.pollNow();
+    releaseEofCheck();
+    await drained;
+    tailer.close();
+
+    expect(records).toEqual([
+      { type: "assistant", n: 1 },
+      { type: "assistant", n: 2 },
+    ]);
+    expect(reader.read).toHaveBeenCalledTimes(2);
+  });
 });

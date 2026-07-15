@@ -99,9 +99,15 @@ interface ClaudePtyTurn {
   readonly items: unknown[];
   readonly toolItems: Map<
     string,
-    { readonly itemId: RuntimeItemId; readonly itemType: CanonicalItemType }
+    {
+      readonly itemId: RuntimeItemId;
+      readonly itemType: CanonicalItemType;
+      readonly toolName: string;
+      readonly input: Record<string, unknown>;
+    }
   >;
   readonly assistantItems: Set<string>;
+  lastAssistantMessageText: string | undefined;
   nativePromptId: string | undefined;
   promptAcknowledged: boolean;
   stopSeen: boolean;
@@ -453,12 +459,10 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     };
     if (semantic.type === "user-acknowledged") {
       if (semantic.text === turn.prompt) turn.promptAcknowledged = true;
-      yield* maybeCompleteTurn(context);
       return;
     }
     if (semantic.type === "assistant-stop") {
       if (semantic.reason !== "tool_use") turn.stopSeen = true;
-      yield* maybeCompleteTurn(context);
       return;
     }
     if (semantic.type === "assistant-text") {
@@ -517,12 +521,19 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         raw,
       });
       turn.items.push(semantic);
-      yield* maybeCompleteTurn(context);
       return;
     }
     if (semantic.type === "tool-started") {
+      // Hook-triggered polls and the interval poll can overlap. A tool-use id
+      // is native-session unique, so never render a second card for it.
+      if (turn.toolItems.has(semantic.toolUseId)) return;
       const itemId = RuntimeItemId.make(`tool-${semantic.toolUseId}`);
-      turn.toolItems.set(semantic.toolUseId, { itemId, itemType: semantic.itemType });
+      turn.toolItems.set(semantic.toolUseId, {
+        itemId,
+        itemType: semantic.itemType,
+        toolName: semantic.toolName,
+        input: semantic.input,
+      });
       yield* emit({
         type: "item.started",
         ...stamp(),
@@ -557,14 +568,21 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
         payload: {
           itemType: startedTool?.itemType ?? "dynamic_tool_call",
           status: semantic.failed ? "failed" : "completed",
-          data: { output: semantic.content },
+          ...(startedTool ? { title: startedTool.toolName } : {}),
+          data: {
+            toolCallId: semantic.toolUseId,
+            ...(startedTool ? { input: startedTool.input } : {}),
+            ...(startedTool && typeof startedTool.input.command === "string"
+              ? { command: startedTool.input.command }
+              : {}),
+            rawOutput: { content: semantic.content },
+          },
         },
         providerRefs: { providerItemId: ProviderItemId.make(semantic.toolUseId) },
         raw,
       });
       turn.toolItems.delete(semantic.toolUseId);
       turn.items.push(semantic);
-      yield* maybeCompleteTurn(context);
       return;
     }
     yield* emit({
@@ -586,7 +604,6 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       providerRefs: {},
       raw,
     });
-    yield* maybeCompleteTurn(context);
   });
 
   const handleTranscriptRecord = Effect.fn("claudeAgent.handleTranscriptRecord")(function* (
@@ -602,9 +619,23 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
     ) {
       return;
     }
-    for (const semantic of parseClaudeTranscriptRecord(record)) {
+    const semantics = parseClaudeTranscriptRecord(record);
+    const assistantMessageText = semantics
+      .filter(
+        (
+          semantic,
+        ): semantic is Extract<ClaudeTranscriptSemanticEvent, { type: "assistant-text" }> =>
+          semantic.type === "assistant-text",
+      )
+      .map((semantic) => semantic.text)
+      .join("\n");
+    if (turn && assistantMessageText.length > 0) {
+      turn.lastAssistantMessageText = assistantMessageText;
+    }
+    for (const semantic of semantics) {
       yield* handleSemanticEvent(context, semantic, record);
     }
+    yield* maybeCompleteTurn(context);
   });
 
   const completeTurn = Effect.fn("claudeAgent.completeTurn")(function* (
@@ -780,6 +811,7 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
       items: [],
       toolItems: new Map(),
       assistantItems: new Set(),
+      lastAssistantMessageText: undefined,
       nativePromptId: undefined,
       promptAcknowledged: false,
       stopSeen: false,
@@ -1151,17 +1183,21 @@ export const makeClaudePtyAdapter = Effect.fn("makeClaudePtyAdapter")(function* 
           type: "hook",
           event: "Stop",
         });
-        if (context.currentTurn) context.currentTurn.stopSeen = true;
         if (context.transcriptTailer) {
           yield* Effect.promise(() => context.transcriptTailer!.pollNow());
         }
+        // Transcript records written before Stop must be projected before Stop
+        // can make the turn completable. Otherwise an earlier assistant block
+        // or tool result can complete the turn and orphan later tool/final
+        // records from the same drain.
+        if (context.currentTurn !== turn) return {};
+        turn.stopSeen = true;
         if (
-          context.currentTurn &&
-          context.currentTurn.assistantItems.size === 0 &&
           typeof hook.last_assistant_message === "string" &&
-          hook.last_assistant_message.length > 0
+          hook.last_assistant_message.length > 0 &&
+          turn.lastAssistantMessageText !== hook.last_assistant_message
         ) {
-          const messageId = `stop-${hook.prompt_id ?? context.currentTurn.turnId}`;
+          const messageId = `stop-${hook.prompt_id ?? turn.turnId}`;
           yield* handleSemanticEvent(
             context,
             {

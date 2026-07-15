@@ -2507,10 +2507,12 @@ describe("ProviderRuntimeIngestion", () => {
       turnId: asTurnId("turn-9"),
       payload: {
         itemType: "command_execution",
-        status: "in_progress",
+        status: "inProgress",
         title: "Read file",
         detail: "/tmp/file.ts",
+        data: { input: { command: "sed -n '1,20p' /tmp/file.ts" } },
       },
+      providerRefs: { providerItemId: "tool-read-1" },
     });
 
     const thread = await waitForThread(
@@ -2524,11 +2526,19 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     expect(thread.session?.status).toBe("ready");
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
-      ),
-    ).toBe(true);
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "tool.started",
+    );
+    expect(activity?.summary).toBe("Read file started");
+    expect(activity?.payload).toMatchObject({
+      itemType: "command_execution",
+      title: "Read file",
+      status: "inProgress",
+      data: {
+        toolCallId: "tool-read-1",
+        input: { command: "sed -n '1,20p' /tmp/file.ts" },
+      },
+    });
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
